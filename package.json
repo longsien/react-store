@@ -1,0 +1,44 @@
+{
+  "name": "@longsien/react-store",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "scripts": {
+    "build": "rm -rf dist && babel src -d dist --copy-files",
+    "prepare": "npm run build"
+  },
+  "author": "Long Sien",
+  "homepage": "https://github.com/longsien/react-store#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/longsien/react-store.git"
+  },
+  "bugs": {
+    "url": "https://github.com/longsien/react-store/issues"
+  },
+  "description": "A lightweight, proxy-based state management library for React.",
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "react": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@babel/cli": "^7.27.2",
+    "@babel/core": "^7.27.4",
+    "@babel/preset-env": "^7.27.2",
+    "@babel/preset-react": "^7.27.1"
+  },
+  "license": "MIT",
+  "keywords": [
+    "react",
+    "state",
+    "store",
+    "management",
+    "global",
+    "hook",
+    "proxy"
+  ]
+}
