@@ -1,11 +1,44 @@
-# Dependencies
+# Node modules
 node_modules/
 
 # Build output
 dist/
 
-# Logs
-npm-debug.log*
-
 # Environment variables
 .env
+.env.*.local
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Icon?
+Desktop.ini
+
+# IDEs & editors
+.vscode/
+.idea/
+
+# Optional caches
+.cache/
+.next/
+.out/
+.nyc_output/
+coverage/
+
+# Misc
+*.log
+*.pid
+*.seed
+*.tgz
+*.swp
+
+# Test outputs
+test-results/
+junit.xml
+*.lcov
