@@ -54,7 +54,7 @@ const userStore = store({ name: 'Winter', age: 24 })
 Creates a store backed by localStorage with automatic persistence. Data is automatically serialized to JSON when saving and deserialized when loading.
 
 ```jsx
-const settingsStore = storeLocal('settings', { theme: 'dark' })
+const settingsStore = store({ theme: 'dark' }).local('settings')
 ```
 
 #### `store(initialValue).session(key)`
@@ -62,7 +62,7 @@ const settingsStore = storeLocal('settings', { theme: 'dark' })
 Creates a store backed by sessionStorage with automatic persistence. Data is automatically serialized to JSON when saving and deserialized when loading.
 
 ```jsx
-const tempStore = storeSession('temp-data', { items: [] })
+const tempStore = store({ items: [] }).session('temp-data')
 ```
 
 ### Hooks
@@ -113,6 +113,7 @@ Update value outside React components. Triggers all subscribed components to re-
 ```jsx
 useStore.set({ name: 'Karina', age: 25 })
 useStore.name.set('Karina')
+useStore.age.set(prev => prev + 1)
 ```
 
 ## Nested Property Access
