@@ -28,9 +28,9 @@ function Counter() {
   return (
     <div>
       <p>Count: {count}</p>
-      // Set value directly
+      {/* Increment Set value directly */}
       <button onClick={() => setCount(count + 1)}>+</button>
-      // Use updater function for synchronous updates
+      {/* Use updater function for synchronous updates */}
       <button onClick={() => setCount(prev => prev - 1)}>-</button>
     </div>
   )
