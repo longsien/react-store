@@ -7,7 +7,8 @@
     "build:dev": "rm -rf dist && babel src -d dist --copy-files",
     "build:min": "BABEL_ENV=minify babel src -d dist --copy-files --out-file-extension .min.js",
     "build": "npm run build:dev && npm run build:min",
-    "prepare": "npm run build"
+    "prepare": "npm run build",
+    "test": "vitest"
   },
   "author": "Long Sien",
   "homepage": "https://github.com/longsien/react-store#readme",
@@ -32,7 +33,11 @@
     "@babel/core": "^7.27.4",
     "@babel/preset-env": "^7.27.2",
     "@babel/preset-react": "^7.27.1",
-    "babel-preset-minify": "^0.5.2"
+    "babel-preset-minify": "^0.5.2",
+    "vitest": "^0.34.6",
+    "happy-dom": "^12.10.3",
+    "@testing-library/react": "^14.0.0",
+    "@testing-library/jest-dom": "^6.1.4"
   },
   "license": "MIT",
   "keywords": [
