@@ -1,4 +1,3 @@
-
 import React from 'react'
 import { store, useStore } from '../src/index'
 import { render, screen, act } from '@testing-library/react'
@@ -140,5 +139,44 @@ describe('Performance Tests', () => {
 
     console.log(`Time to create ${numStores} stores: ${creationTime.toFixed(3)} ms`)
     expect(creationTime).toBeLessThan(100) // Expect creating many stores to be fast
+  })
+
+  it('should handle 100 components listening to different paths efficiently', () => {
+    const initialData = {}
+    for (let i = 0; i < 100; i++) {
+      initialData[`item${i}`] = `value${i}`
+    }
+    const myStore = store(initialData)
+
+    const TestComponent = ({ path }) => {
+      const [value] = useStore(myStore[path])
+      return <div data-testid={path}>{value}</div>
+    }
+
+    const components = []
+    for (let i = 0; i < 100; i++) {
+      components.push(<TestComponent key={`item${i}`} path={`item${i}`} />)
+    }
+
+    render(<div>{components}</div>)
+
+    for (let i = 0; i < 100; i++) {
+      expect(screen.getByTestId(`item${i}`)).toHaveTextContent(`value${i}`)
+    }
+
+    const start = performance.now()
+    act(() => {
+      for (let i = 0; i < 100; i++) {
+        myStore[`item${i}`].set(`newValue${i}`)
+      }
+    })
+    const end = performance.now()
+    const updateTime = end - start
+
+    for (let i = 0; i < 100; i++) {
+      expect(screen.getByTestId(`item${i}`)).toHaveTextContent(`newValue${i}`)
+    }
+    console.log(`Update time for 100 components: ${updateTime.toFixed(3)} ms`)
+    expect(updateTime).toBeLessThan(100)
   })
 })
