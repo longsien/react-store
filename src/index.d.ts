@@ -88,6 +88,29 @@ export interface Store<T> {
    * ```
    */
   session(key: string): Store<T>
+
+  /**
+   * Load data asynchronously into this store.
+   * The async function is called immediately and the result updates the store.
+   * On error, sets an error state object with error details.
+   * Returns the store proxy for chaining.
+   *
+   * @param asyncFn A function that returns a Promise with the data to load
+   * @returns The store proxy for method chaining
+   * @example
+   * ```ts
+   * const pokeStore = store('Loading...').async(() =>
+   *   fetch('https://pokeapi.co/api/v2/pokemon/1').then(res => res.json())
+   * )
+   *
+   * // Error handling
+   * const [data, setData] = useStore(pokeStore)
+   * if (data?.error) {
+   *   console.log('Error:', data.message, 'Status:', data.status)
+   * }
+   * ```
+   */
+  async(asyncFn: () => Promise<T>): Store<T>
 }
 
 /**
@@ -254,6 +277,79 @@ declare global {
     [index: number]: T
   }
 }
+
+/**
+ * Error state object returned when async operations fail
+ */
+export interface ErrorState {
+  error: true
+  message: string
+  status: string
+  originalError: any
+}
+
+/**
+ * Check if data represents an error state
+ * @param data The data to check
+ * @returns True if data is an error state
+ * @example
+ * ```ts
+ * if (isError(pokemon)) {
+ *   console.log('Error:', pokemon.message)
+ * }
+ * ```
+ */
+export function isError(data: any): data is ErrorState
+
+/**
+ * Check if data represents a successful result
+ * @param data The data to check
+ * @returns True if data is not an error state
+ * @example
+ * ```ts
+ * if (isSuccess(pokemon)) {
+ *   console.log('Success:', pokemon.name)
+ * }
+ * ```
+ */
+export function isSuccess(data: any): boolean
+
+/**
+ * Check if data represents a loading state
+ * @param data The data to check
+ * @returns True if data is in loading state
+ * @example
+ * ```ts
+ * if (isLoading(pokemon)) {
+ *   return <div>Loading...</div>
+ * }
+ * ```
+ */
+export function isLoading(data: any): boolean
+
+/**
+ * Get error message from data if it's an error state
+ * @param data The data to check
+ * @returns Error message or null
+ * @example
+ * ```ts
+ * const errorMsg = getErrorMessage(pokemon)
+ * if (errorMsg) console.log('Error:', errorMsg)
+ * ```
+ */
+export function getErrorMessage(data: any): string | null
+
+/**
+ * Get error status from data if it's an error state
+ * @param data The data to check
+ * @returns Error status or null
+ * @example
+ * ```ts
+ * const status = getErrorStatus(pokemon)
+ * if (status) console.log('Status:', status)
+ * ```
+ */
+export function getErrorStatus(data: any): string | null
 
 /**
  * Additional type utilities for better IntelliSense support

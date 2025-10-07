@@ -110,6 +110,34 @@ function createStoreProxy(storeObj, path = []) {
         }
       }
 
+      // Async method for loading data
+      if (prop === 'async') {
+        return asyncFn => {
+          // Start the async operation immediately
+          asyncFn()
+            .then(result => {
+              const state = getState(storeObj)
+              const setStateFn = createSetState(state, path)
+              setStateFn(result)
+            })
+            .catch(error => {
+              console.error('Async store operation failed:', error)
+              // Set error state with message and status
+              const state = getState(storeObj)
+              const setStateFn = createSetState(state, path)
+              setStateFn({
+                error: true,
+                message: error.message || 'An error occurred',
+                status: error.status || 'error',
+                originalError: error,
+              })
+            })
+
+          // Return the store proxy for chaining
+          return proxy
+        }
+      }
+
       // Create a nested proxy for property access
       return createStoreProxy(storeObj, [...path, prop])
     },
@@ -257,4 +285,25 @@ export const storeSession = (key, initialValue) => {
 // Legacy create store with local storage
 export const storeLocal = (key, initialValue) => {
   return createStorageStore('local', key, initialValue)
+}
+
+// Error handling utilities
+export const isError = data => {
+  return data && typeof data === 'object' && data.error === true
+}
+
+export const isSuccess = data => {
+  return data && !isError(data)
+}
+
+export const isLoading = data => {
+  return typeof data === 'string' || data === null || data === undefined
+}
+
+export const getErrorMessage = data => {
+  return isError(data) ? data.message : null
+}
+
+export const getErrorStatus = data => {
+  return isError(data) ? data.status : null
 }
