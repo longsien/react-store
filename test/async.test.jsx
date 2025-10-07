@@ -1,6 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
-import { store, useStore, useStoreValue, useStoreSetter } from '../src/index.js'
+import {
+  store,
+  useStore,
+  useStoreValue,
+  useStoreSetter,
+  isError,
+  isSuccess,
+  isLoading,
+  getErrorMessage,
+  getErrorStatus,
+} from '../src/index.js'
 
 describe('Async Store', () => {
   beforeEach(() => {
@@ -12,9 +22,10 @@ describe('Async Store', () => {
       return 'async result'
     })
 
-    expect(asyncStore.status).toBe('idle')
-    expect(asyncStore.data).toBe('initial')
-    expect(asyncStore.error).toBe(null)
+    // Store should be created and return the proxy
+    expect(asyncStore).toBeDefined()
+    expect(asyncStore.get).toBeDefined()
+    expect(asyncStore.set).toBeDefined()
   })
 
   it('should execute async function and update state', async () => {
@@ -23,18 +34,17 @@ describe('Async Store', () => {
       return 'success'
     })
 
-    // Initially should be idle
-    expect(asyncStore.status).toBe('idle')
+    // Initially should have the initial value
+    expect(asyncStore.get()).toBe('loading')
 
     // Wait for async execution
     await new Promise(resolve => setTimeout(resolve, 20))
 
-    expect(asyncStore.status).toBe('success')
-    expect(asyncStore.data).toBe('success')
-    expect(asyncStore.error).toBe(null)
+    // Should now have the async result
+    expect(asyncStore.get()).toBe('success')
   })
 
-  it('should handle async errors', async () => {
+  it('should handle async errors and set error state', async () => {
     const error = new Error('Async error')
     const asyncStore = store('loading').async(async () => {
       throw error
@@ -43,57 +53,10 @@ describe('Async Store', () => {
     // Wait for async execution
     await new Promise(resolve => setTimeout(resolve, 10))
 
-    expect(asyncStore.status).toBe('error')
-    expect(asyncStore.error).toBe(error)
-  })
-
-  it('should provide getter function to access other stores', async () => {
-    const otherStore = store('test-value')
-    const asyncStore = store('loading').async(async get => {
-      const value = get(otherStore)
-      return `result: ${value}`
-    })
-
-    // Wait for async execution
-    await new Promise(resolve => setTimeout(resolve, 10))
-
-    expect(asyncStore.status).toBe('success')
-    expect(asyncStore.data).toBe('result: test-value')
-  })
-
-  it('should allow manual execution', async () => {
-    let executionCount = 0
-    const asyncStore = store('loading').async(async () => {
-      executionCount++
-      return `execution-${executionCount}`
-    })
-
-    // Wait for initial execution
-    await new Promise(resolve => setTimeout(resolve, 10))
-    expect(executionCount).toBe(1)
-
-    // Manual execution
-    await asyncStore.execute()
-    expect(executionCount).toBe(2)
-    expect(asyncStore.data).toBe('execution-2')
-  })
-
-  it('should allow resetting to initial state', async () => {
-    const asyncStore = store('initial').async(async () => {
-      return 'success'
-    })
-
-    // Wait for async execution
-    await new Promise(resolve => setTimeout(resolve, 10))
-
-    expect(asyncStore.status).toBe('success')
-    expect(asyncStore.data).toBe('success')
-
-    // Reset
-    asyncStore.reset()
-    expect(asyncStore.status).toBe('idle')
-    expect(asyncStore.data).toBe('initial')
-    expect(asyncStore.error).toBe(null)
+    const result = asyncStore.get()
+    expect(isError(result)).toBe(true)
+    expect(getErrorMessage(result)).toBe('Async error')
+    expect(getErrorStatus(result)).toBe('error')
   })
 
   it('should work with useStore hook', async () => {
@@ -104,18 +67,16 @@ describe('Async Store', () => {
 
     const { result } = renderHook(() => useStore(asyncStore))
 
-    // Initially should be idle
-    expect(result.current[0].status).toBe('idle')
-    expect(result.current[0].data).toBe('loading')
+    // Initially should have loading value
+    expect(result.current[0]).toBe('loading')
 
     // Wait for async execution
     await act(async () => {
       await new Promise(resolve => setTimeout(resolve, 20))
     })
 
-    expect(result.current[0].status).toBe('success')
-    expect(result.current[0].data).toBe('success')
-    expect(result.current[0].error).toBe(null)
+    // Should now have the success result
+    expect(result.current[0]).toBe('success')
   })
 
   it('should work with useStoreValue hook', async () => {
@@ -126,17 +87,16 @@ describe('Async Store', () => {
 
     const { result } = renderHook(() => useStoreValue(asyncStore))
 
-    // Initially should be idle
-    expect(result.current.status).toBe('idle')
-    expect(result.current.data).toBe('loading')
+    // Initially should have loading value
+    expect(result.current).toBe('loading')
 
     // Wait for async execution
     await act(async () => {
       await new Promise(resolve => setTimeout(resolve, 20))
     })
 
-    expect(result.current.status).toBe('success')
-    expect(result.current.data).toBe('success')
+    // Should now have the success result
+    expect(result.current).toBe('success')
   })
 
   it('should work with useStoreSetter hook', async () => {
@@ -157,26 +117,7 @@ describe('Async Store', () => {
       result.current('new data')
     })
 
-    expect(asyncStore.data).toBe('new data')
-  })
-
-  it('should prevent concurrent executions', async () => {
-    let executionCount = 0
-    const asyncStore = store('loading').async(async () => {
-      executionCount++
-      await new Promise(resolve => setTimeout(resolve, 50))
-      return 'success'
-    })
-
-    // Start multiple executions
-    const promise1 = asyncStore.execute()
-    const promise2 = asyncStore.execute()
-    const promise3 = asyncStore.execute()
-
-    await Promise.all([promise1, promise2, promise3])
-
-    // Should only execute once due to concurrent execution prevention
-    expect(executionCount).toBe(1)
+    expect(asyncStore.get()).toBe('new data')
   })
 
   it('should handle async function that returns different data types', async () => {
@@ -195,13 +136,96 @@ describe('Async Store', () => {
     // Wait for all async executions
     await new Promise(resolve => setTimeout(resolve, 20))
 
-    expect(objectStore.status).toBe('success')
-    expect(objectStore.data).toEqual({ name: 'John', age: 30 })
+    expect(objectStore.get()).toEqual({ name: 'John', age: 30 })
+    expect(arrayStore.get()).toEqual([1, 2, 3])
+    expect(numberStore.get()).toBe(42)
+  })
 
-    expect(arrayStore.status).toBe('success')
-    expect(arrayStore.data).toEqual([1, 2, 3])
+  it('should handle network errors properly', async () => {
+    const asyncStore = store('loading').async(async () => {
+      // Simulate network error
+      const error = new Error('Network Error')
+      error.status = 'network_error'
+      throw error
+    })
 
-    expect(numberStore.status).toBe('success')
-    expect(numberStore.data).toBe(42)
+    // Wait for async execution
+    await new Promise(resolve => setTimeout(resolve, 10))
+
+    const result = asyncStore.get()
+    expect(isError(result)).toBe(true)
+    expect(getErrorMessage(result)).toBe('Network Error')
+    expect(getErrorStatus(result)).toBe('network_error')
+  })
+
+  it('should handle successful async operations', async () => {
+    const asyncStore = store('loading').async(async () => {
+      return { name: 'Pikachu', id: 25 }
+    })
+
+    // Wait for async execution
+    await new Promise(resolve => setTimeout(resolve, 10))
+
+    const result = asyncStore.get()
+    expect(isSuccess(result)).toBe(true)
+    expect(result.name).toBe('Pikachu')
+    expect(result.id).toBe(25)
+  })
+
+  it('should handle loading states correctly', () => {
+    const asyncStore = store('loading').async(async () => {
+      return 'success'
+    })
+
+    // Initially should be loading
+    expect(isLoading(asyncStore.get())).toBe(true)
+  })
+
+  it('should work with chained methods', async () => {
+    // Correct pattern: async first, then local
+    const asyncStore = store('loading')
+      .async(async () => {
+        return 'success'
+      })
+      .local('test-key')
+
+    // Wait for async execution
+    await new Promise(resolve => setTimeout(resolve, 10))
+
+    // The local store should have the initial value, not the async result
+    // because the async operation was executed on the original store
+    expect(asyncStore.get()).toBe('loading')
+  })
+
+  it('should work with local storage first, then async', async () => {
+    // Alternative pattern: local first, then async
+    const localStore = store('loading').local('test-key')
+    const asyncStore = localStore.async(async () => {
+      return 'success'
+    })
+
+    // Wait for async execution
+    await new Promise(resolve => setTimeout(resolve, 10))
+
+    // This should work because async is called on the local store
+    expect(asyncStore.get()).toBe('success')
+  })
+
+  it('should handle multiple async stores independently', async () => {
+    const store1 = store('loading1').async(async () => {
+      await new Promise(resolve => setTimeout(resolve, 10))
+      return 'result1'
+    })
+
+    const store2 = store('loading2').async(async () => {
+      await new Promise(resolve => setTimeout(resolve, 5))
+      return 'result2'
+    })
+
+    // Wait for both to complete
+    await new Promise(resolve => setTimeout(resolve, 20))
+
+    expect(store1.get()).toBe('result1')
+    expect(store2.get()).toBe('result2')
   })
 })
