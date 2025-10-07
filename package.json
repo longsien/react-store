@@ -1,6 +1,9 @@
 {
   "name": "@longsien/react-store",
   "version": "1.1.0",
+  "workspaces": [
+    "examples/demo"
+  ],
   "main": "dist/index.js",
   "module": "dist/index.js",
   "scripts": {
@@ -8,7 +11,8 @@
     "build:min": "BABEL_ENV=minify babel src -d dist --copy-files --out-file-extension .min.js",
     "build": "npm run build:dev && npm run build:min",
     "prepare": "npm run build",
-    "test": "vitest"
+    "test": "vitest",
+    "demo": "vite examples/demo"
   },
   "author": "Long Sien",
   "homepage": "https://github.com/longsien/react-store#readme",
@@ -29,18 +33,19 @@
     "react": ">=18.0.0"
   },
   "devDependencies": {
-    "@babel/cli": "^7.27.2",
-    "@babel/core": "^7.27.4",
-    "@babel/preset-env": "^7.27.2",
+    "@babel/cli": "^7.28.3",
+    "@babel/core": "^7.28.4",
+    "@babel/preset-env": "^7.28.3",
     "@babel/preset-react": "^7.27.1",
     "@babel/preset-typescript": "^7.27.1",
-    "@testing-library/jest-dom": "^6.1.4",
-    "@testing-library/react": "^14.0.0",
-    "@types/react": "^18.3.23",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.0",
+    "@types/react": "^19.2.1",
     "babel-preset-minify": "^0.5.2",
-    "happy-dom": "^12.10.3",
-    "typescript": "^5.8.3",
-    "vitest": "^0.34.6"
+    "happy-dom": "^19.0.2",
+    "typescript": "^5.9.3",
+"vitest": "^3.2.4",
+    "@vitejs/plugin-react": "^4.3.1"
   },
   "license": "MIT",
   "keywords": [

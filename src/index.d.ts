@@ -62,14 +62,14 @@ export interface Store<T> {
   /**
    * Create a localStorage-backed version of this store.
    * Data is automatically persisted and restored across browser sessions.
-   * Only available on root stores (cannot be called on nested properties).
+   * Can be called on both root stores and nested properties.
    *
    * @param key The localStorage key to use for persistence
    * @returns A new store instance backed by localStorage
-   * @throws Error if called on a nested store property
    * @example
    * ```ts
    * const settingsStore = store({ theme: 'dark' }).local('app-settings')
+   * const userThemeStore = store({ user: { theme: 'light' } }).user.theme.local('user-theme')
    * ```
    */
   local(key: string): Store<T>
@@ -77,14 +77,14 @@ export interface Store<T> {
   /**
    * Create a sessionStorage-backed version of this store.
    * Data is automatically persisted for the current browser session only.
-   * Only available on root stores (cannot be called on nested properties).
+   * Can be called on both root stores and nested properties.
    *
    * @param key The sessionStorage key to use for persistence
    * @returns A new store instance backed by sessionStorage
-   * @throws Error if called on a nested store property
    * @example
    * ```ts
    * const tempStore = store({ items: [] }).session('temp-data')
+   * const userTempStore = store({ user: { temp: 'data' } }).user.temp.session('user-temp')
    * ```
    */
   session(key: string): Store<T>

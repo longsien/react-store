@@ -91,22 +91,22 @@ function createStoreProxy(storeObj, path = []) {
       // Chainable local storage method
       if (prop === 'local') {
         return key => {
-          // Only allow on root store (no path)
-          if (path.length > 0) {
-            throw new Error('Storage methods can only be called on root store')
-          }
-          return createStorageStore('local', key, storeObj.value)
+          const currentValue =
+            path.length > 0
+              ? getValueAtPath(storeObj.value, path)
+              : storeObj.value
+          return createStorageStore('local', key, currentValue)
         }
       }
 
       // Chainable session storage method
       if (prop === 'session') {
         return key => {
-          // Only allow on root store (no path)
-          if (path.length > 0) {
-            throw new Error('Storage methods can only be called on root store')
-          }
-          return createStorageStore('session', key, storeObj.value)
+          const currentValue =
+            path.length > 0
+              ? getValueAtPath(storeObj.value, path)
+              : storeObj.value
+          return createStorageStore('session', key, currentValue)
         }
       }
 
