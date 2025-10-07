@@ -8,144 +8,197 @@ import {
   getErrorStatus,
 } from '../../../src/index.js' // import from your library
 import { useEffect, useState } from 'react'
-import DerivedStoresExample from './DerivedStoresExample.jsx'
 
+// Basic stores
+const pokemonIdStore = store(1) // Start with a valid Pokemon ID
 const counterStore = store(0)
-const pokeStore = store('default initial value while loading maybe?').async(
-  () =>
-    fetch('https://pokeapi.co/api/v2/pokemon/pikachu').then(res => res.json())
-)
+const nameStore = store('John')
+const ageStore = store(25)
+const itemsStore = store(['apple', 'banana', 'cherry'])
 
-// Test error handling with invalid URL
-const errorStore = store('Loading...').async(() =>
-  fetch('https://invalid-url-that-will-fail.com/api/data').then(res =>
-    res.json()
-  )
-)
+// Derived stores - simple transformations
+const doubledCounterStore = counterStore.derive(count => count * 2)
+const isEvenStore = counterStore.derive(count => count % 2 === 0)
+const greetingStore = nameStore.derive(name => `Hello, ${name}!`)
+const canVoteStore = ageStore.derive(age => age >= 18)
+const itemCountStore = itemsStore.derive(items => items.length)
+const firstItemStore = itemsStore.derive(items => items[0] || 'No items')
 
-// Test nested storage methods
-const userStore = store({
-  user: {
-    name: 'John',
-    settings: { theme: 'dark', count: 0 },
-  },
+// Derived stores - complex transformations
+const userInfoStore = store(get => ({
+  name: get(nameStore),
+  age: get(ageStore),
+  canVote: get(canVoteStore),
+}))
+
+const statsStore = store(get => ({
+  counter: get(counterStore),
+  doubled: get(doubledCounterStore),
+  isEven: get(isEvenStore),
+  itemCount: get(itemCountStore),
+}))
+
+// Async derived store
+const pokemonDetailsStore = pokemonIdStore.derive(async id => {
+  const response = await fetch(`https://pokeapi.co/api/v2/pokemon/${id}`)
+  return response.json()
 })
 
-// This should now work without throwing an error!
-const themeStore = userStore.user.settings.theme.local('user-theme')
-const countStore = userStore.user.settings.count.session('user-count')
-
 export default function App() {
-  const [count, setCount] = useStore(counterStore)
-  const [pokemon, setPokemon] = useStore(pokeStore)
-  const [errorData, setErrorData] = useStore(errorStore)
+  // Basic store values
+  const [counter, setCounter] = useStore(counterStore)
+  const [name, setName] = useStore(nameStore)
+  const [age, setAge] = useStore(ageStore)
+  const [items, setItems] = useStore(itemsStore)
+  const [pokemonId, setPokemonId] = useStore(pokemonIdStore)
 
-  // Test nested storage stores
-  const [theme, setTheme] = useStore(themeStore)
-  const [userCount, setUserCount] = useStore(countStore)
+  // Derived store values
+  const [doubledCounter] = useStore(doubledCounterStore)
+  const [isEven] = useStore(isEvenStore)
+  const [greeting] = useStore(greetingStore)
+  const [canVote] = useStore(canVoteStore)
+  const [itemCount] = useStore(itemCountStore)
+  const [firstItem] = useStore(firstItemStore)
+  const [userInfo] = useStore(userInfoStore)
+  const [stats] = useStore(statsStore)
+  const [pokemonDetails] = useStore(pokemonDetailsStore)
 
-  const [showDerivedStores, setShowDerivedStores] = useState(false)
-
-  useEffect(() => {
-    console.log('Pokemon data:', pokemon)
-  }, [pokemon])
-
-  useEffect(() => {
-    console.log('Error data:', errorData)
-  }, [errorData])
-
-  if (showDerivedStores) {
-    return (
-      <div>
-        <button onClick={() => setShowDerivedStores(false)}>
-          ← Back to Basic Examples
-        </button>
-        <DerivedStoresExample />
-      </div>
-    )
-  }
-
-  // Test your library here
   return (
-    <div>
+    <div style={{ padding: '20px', fontFamily: 'Arial, sans-serif' }}>
       <h1>React Store Demo</h1>
 
-      <div style={{ marginBottom: '20px' }}>
-        <button onClick={() => setShowDerivedStores(true)}>
-          View Derived Stores Examples →
-        </button>
+      {/* Counter Examples */}
+      <div
+        style={{
+          marginBottom: '30px',
+          border: '1px solid #ccc',
+          padding: '15px',
+          borderRadius: '5px',
+        }}>
+        <h2>Counter Examples</h2>
+        <div>
+          <p>Counter: {counter}</p>
+          <p>Doubled: {doubledCounter}</p>
+          <p>Is Even: {isEven ? 'Yes' : 'No'}</p>
+          <button onClick={() => setCounter(counter + 1)}>Increment</button>
+          <button onClick={() => setCounter(counter - 1)}>Decrement</button>
+          <button onClick={() => setCounter(0)}>Reset</button>
+        </div>
       </div>
 
-      <div>
-        <h2>Counter: {count}</h2>
-        <button onClick={() => setCount(count + 1)}>Increment</button>
-        <button onClick={() => setCount(count - 1)}>Decrement</button>
+      {/* User Info Examples */}
+      <div
+        style={{
+          marginBottom: '30px',
+          border: '1px solid #ccc',
+          padding: '15px',
+          borderRadius: '5px',
+        }}>
+        <h2>User Info Examples</h2>
+        <div>
+          <p>
+            Name: <input value={name} onChange={e => setName(e.target.value)} />
+          </p>
+          <p>
+            Age:{' '}
+            <input
+              type='number'
+              value={age}
+              onChange={e => setAge(Number(e.target.value))}
+            />
+          </p>
+          <p>Greeting: {greeting}</p>
+          <p>Can Vote: {canVote ? 'Yes' : 'No'}</p>
+          <h3>Combined User Info:</h3>
+          <pre>{JSON.stringify(userInfo, null, 2)}</pre>
+        </div>
       </div>
 
-      <div>
-        <h2>Async Store Test</h2>
-        {isError(pokemon) ? (
+      {/* Items Examples */}
+      <div
+        style={{
+          marginBottom: '30px',
+          border: '1px solid #ccc',
+          padding: '15px',
+          borderRadius: '5px',
+        }}>
+        <h2>Items Examples</h2>
+        <div>
+          <p>Items: {items.join(', ')}</p>
+          <p>Item Count: {itemCount}</p>
+          <p>First Item: {firstItem}</p>
+          <button onClick={() => setItems([...items, 'new item'])}>
+            Add Item
+          </button>
+          <button onClick={() => setItems(items.slice(0, -1))}>
+            Remove Last
+          </button>
+          <button onClick={() => setItems(['apple', 'banana', 'cherry'])}>
+            Reset
+          </button>
+        </div>
+      </div>
+
+      {/* Stats Example */}
+      <div
+        style={{
+          marginBottom: '30px',
+          border: '1px solid #ccc',
+          padding: '15px',
+          borderRadius: '5px',
+        }}>
+        <h2>Combined Stats</h2>
+        <pre>{JSON.stringify(stats, null, 2)}</pre>
+      </div>
+
+      {/* Async Pokemon Example */}
+      <div
+        style={{
+          marginBottom: '30px',
+          border: '1px solid #ccc',
+          padding: '15px',
+          borderRadius: '5px',
+        }}>
+        <h2>Async Derived Store (Pokemon)</h2>
+        <div>
+          <label>Pokemon ID: {pokemonId}</label>
+          <div>
+            <button onClick={() => setPokemonId(pokemonId - 1)}>
+              Previous
+            </button>
+            <button onClick={() => setPokemonId(pokemonId + 1)}>Next</button>
+          </div>
+        </div>
+
+        <h3>Pokemon Details:</h3>
+        {isLoading(pokemonDetails) ?
+          <div>
+            <p>Loading Pokemon...</p>
+          </div>
+        : isError(pokemonDetails) ?
           <div style={{ color: 'red' }}>
             <p>
-              <strong>Error:</strong> {getErrorMessage(pokemon)}
+              <strong>Error:</strong> {getErrorMessage(pokemonDetails)}
             </p>
             <p>
-              <strong>Status:</strong> {getErrorStatus(pokemon)}
+              <strong>Status:</strong> {getErrorStatus(pokemonDetails)}
             </p>
           </div>
-        ) : isSuccess(pokemon) ? (
+        : isSuccess(pokemonDetails) ?
           <div>
-            <p>Pokemon: {pokemon.name}</p>
-            <p>ID: {pokemon.id}</p>
-            <p>Height: {pokemon.height}</p>
-            <p>Weight: {pokemon.weight}</p>
-            <p>Types: {pokemon.types?.map(t => t.type.name).join(', ')}</p>
+            <p>Pokemon: {pokemonDetails.name}</p>
+            <p>ID: {pokemonDetails.id}</p>
+            <p>Height: {pokemonDetails.height}</p>
+            <p>Weight: {pokemonDetails.weight}</p>
+            <p>
+              Types: {pokemonDetails.types?.map(t => t.type.name).join(', ')}
+            </p>
             <p>
               Abilities:{' '}
-              {pokemon.abilities?.map(a => a.ability.name).join(', ')}
+              {pokemonDetails.abilities?.map(a => a.ability.name).join(', ')}
             </p>
           </div>
-        ) : isLoading(pokemon) ? (
-          <p>Pokemon: {pokemon}</p>
-        ) : (
-          <p>Loading...</p>
-        )}
-      </div>
-
-      <div>
-        <h2>Error Handling Test</h2>
-        {isError(errorData) ? (
-          <div
-            style={{
-              color: 'red',
-              border: '1px solid red',
-              padding: '10px',
-              margin: '10px 0',
-            }}>
-            <p>
-              <strong>Error:</strong> {getErrorMessage(errorData)}
-            </p>
-            <p>
-              <strong>Status:</strong> {getErrorStatus(errorData)}
-            </p>
-          </div>
-        ) : isLoading(errorData) ? (
-          <p>Loading error test...</p>
-        ) : (
-          <p>Unexpected state: {JSON.stringify(errorData)}</p>
-        )}
-      </div>
-
-      <div>
-        <h2>Nested Storage Test</h2>
-        <p>Theme: {theme} (persisted to localStorage)</p>
-        <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
-          Toggle Theme
-        </button>
-
-        <p>User Count: {userCount} (persisted to sessionStorage)</p>
-        <button onClick={() => setUserCount(userCount + 1)}>+</button>
-        <button onClick={() => setUserCount(userCount - 1)}>-</button>
+        : <p>Unknown state...</p>}
       </div>
     </div>
   )

@@ -32,12 +32,12 @@ describe('Performance Tests', () => {
 
     function CounterComponent() {
       const [count, setCount] = useStore(myStore.count)
-      return <p data-testid="count">Count: {count}</p>
+      return <p data-testid='count'>Count: {count}</p>
     }
 
     function DataComponent() {
       const [data] = useStore(myStore.data)
-      return <p data-testid="data">Data: {data}</p>
+      return <p data-testid='data'>Data: {data}</p>
     }
 
     render(
@@ -56,7 +56,9 @@ describe('Performance Tests', () => {
       updateCountTime = end - start
     })
 
-    console.log(`Targeted Update Time (count): ${updateCountTime.toFixed(3)} ms`)
+    console.log(
+      `Targeted Update Time (count): ${updateCountTime.toFixed(3)} ms`
+    )
     expect(updateCountTime).toBeLessThan(10) // Expect targeted update to be very fast
     expect(screen.getByTestId('count')).toHaveTextContent('Count: 1')
 
@@ -122,7 +124,9 @@ describe('Performance Tests', () => {
       updateStatusTime = end - start
     })
 
-    console.log(`Small Update in Large Store Time: ${updateStatusTime.toFixed(3)} ms`)
+    console.log(
+      `Small Update in Large Store Time: ${updateStatusTime.toFixed(3)} ms`
+    )
     expect(updateStatusTime).toBeLessThan(10) // Should still be fast due to selective re-render
   })
 
@@ -137,7 +141,9 @@ describe('Performance Tests', () => {
     const createEndTime = performance.now()
     const creationTime = createEndTime - createStartTime
 
-    console.log(`Time to create ${numStores} stores: ${creationTime.toFixed(3)} ms`)
+    console.log(
+      `Time to create ${numStores} stores: ${creationTime.toFixed(3)} ms`
+    )
     expect(creationTime).toBeLessThan(100) // Expect creating many stores to be fast
   })
 

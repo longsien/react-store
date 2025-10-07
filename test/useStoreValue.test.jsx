@@ -1,4 +1,3 @@
-
 import React from 'react'
 import { store, useStoreValue } from '../src/index'
 import { render, screen, act } from '@testing-library/react'

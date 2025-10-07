@@ -1,4 +1,3 @@
-
 import React from 'react'
 import { store, useStore } from '../src/index'
 import { render, screen, fireEvent } from '@testing-library/react'
@@ -10,9 +9,7 @@ describe('Nested Updates', () => {
 
     function ThemeSwitcher() {
       const [theme, setTheme] = useStore(settingsStore.profile.theme)
-      return (
-        <button onClick={() => setTheme('light')}>Switch Theme</button>
-      )
+      return <button onClick={() => setTheme('light')}>Switch Theme</button>
     }
 
     render(<ThemeSwitcher />)

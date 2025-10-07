@@ -79,15 +79,15 @@ const setValueAtPath = (obj, path, value) => {
 }
 
 // Create setState function
-let createSetState = (state, path) => {
+const createSetState = (state, path) => {
   return nextValueOrUpdater => {
     const currentValue =
       path.length === 0 ? state.value : getValueAtPath(state.value, path)
 
     const nextValue =
-      typeof nextValueOrUpdater === 'function'
-        ? nextValueOrUpdater(currentValue)
-        : nextValueOrUpdater
+      typeof nextValueOrUpdater === 'function' ?
+        nextValueOrUpdater(currentValue)
+      : nextValueOrUpdater
 
     if (Object.is(nextValue, currentValue)) return
 
@@ -108,7 +108,14 @@ let createSetState = (state, path) => {
             const storeObj = getState(store)
             return storeObj.value
           }
-          computeDerivedValue(derivedStoreObj, simpleGet)
+
+          // Handle async derived stores differently
+          if (derivedStoreObj.isAsync) {
+            // For async derived stores, trigger the getter to check for changes
+            derivedStoreObj.getter(simpleGet)
+          } else {
+            computeDerivedValue(derivedStoreObj, simpleGet)
+          }
         }
       })
     }
@@ -160,6 +167,86 @@ const createDerivedStore = getter => {
   storeObj.value = computeValue()
 
   return createStoreProxy(storeObj)
+}
+
+// Create async derived store that handles async operations
+const createAsyncDerivedStore = (target, asyncFn) => {
+  const asyncStoreObj = {
+    value: { loading: true },
+    listeners: new Set(),
+    isDerived: true,
+    isAsync: true,
+    getter: get => {
+      // This will be called when dependencies change
+      return asyncStoreObj.value
+    },
+    dependencies: new Set(),
+    lastComputedValue: undefined,
+    asyncFn,
+    isRunning: false,
+    lastInputValue: undefined,
+  }
+
+  stateMap.set(asyncStoreObj, asyncStoreObj)
+  derivedStoreMap.set(asyncStoreObj, asyncStoreObj)
+
+  // Function to run the async operation
+  const runAsyncOperation = inputValue => {
+    if (asyncStoreObj.isRunning) return
+
+    asyncStoreObj.isRunning = true
+    asyncStoreObj.value = { loading: true }
+    asyncStoreObj.listeners.forEach(listener => listener())
+
+    // Create a proper get function that can access store values
+    const get = store => {
+      const storeObj = getState(store)
+      return storeObj.value
+    }
+
+    asyncFn(get)
+      .then(result => {
+        asyncStoreObj.value = result
+        asyncStoreObj.lastComputedValue = result
+        asyncStoreObj.isRunning = false
+        asyncStoreObj.listeners.forEach(listener => listener())
+      })
+      .catch(error => {
+        asyncStoreObj.value = {
+          error: true,
+          message: error.message || 'An error occurred',
+          status: error.status || 'error',
+        }
+        asyncStoreObj.lastComputedValue = asyncStoreObj.value
+        asyncStoreObj.isRunning = false
+        asyncStoreObj.listeners.forEach(listener => listener())
+      })
+  }
+
+  // Start the initial async operation
+  runAsyncOperation()
+
+  // Override the getter to re-run async operation when dependencies change
+  asyncStoreObj.getter = get => {
+    // Track dependencies by calling the original derived store's getter
+    const currentInputValue = target.getter(get)
+
+    // If the input value changed, re-run the async operation
+    if (!Object.is(currentInputValue, asyncStoreObj.lastInputValue)) {
+      asyncStoreObj.lastInputValue = currentInputValue
+      runAsyncOperation(currentInputValue)
+    }
+
+    return asyncStoreObj.value
+  }
+
+  // Set up dependency tracking with the original derived store
+  if (!dependencyMap.has(target)) {
+    dependencyMap.set(target, new Set())
+  }
+  dependencyMap.get(target).add(asyncStoreObj)
+
+  return createStoreProxy(asyncStoreObj)
 }
 
 // Compute derived store value and handle dependency updates
@@ -226,8 +313,8 @@ function createStoreProxy(storeObj, path = []) {
             return newValue
           }
           const state = getState(storeObj)
-          return path.length > 0
-            ? getValueAtPath(state.value, path)
+          return path.length > 0 ?
+              getValueAtPath(state.value, path)
             : state.value
         }
       }
@@ -248,9 +335,9 @@ function createStoreProxy(storeObj, path = []) {
       if (prop === 'local') {
         return key => {
           const currentValue =
-            path.length > 0
-              ? getValueAtPath(storeObj.value, path)
-              : storeObj.value
+            path.length > 0 ?
+              getValueAtPath(storeObj.value, path)
+            : storeObj.value
           return createStorageStore('local', key, currentValue)
         }
       }
@@ -258,30 +345,37 @@ function createStoreProxy(storeObj, path = []) {
       if (prop === 'session') {
         return key => {
           const currentValue =
-            path.length > 0
-              ? getValueAtPath(storeObj.value, path)
-              : storeObj.value
+            path.length > 0 ?
+              getValueAtPath(storeObj.value, path)
+            : storeObj.value
           return createStorageStore('session', key, currentValue)
+        }
+      }
+
+      if (prop === 'derive') {
+        return derivedFn => {
+          // Create a derived store that depends on this store
+          const derivedStore = store(get => {
+            const currentValue = get(proxy)
+            return derivedFn(currentValue)
+          })
+
+          // If the derived function returns a Promise, make it async
+          if (derivedStore.get() instanceof Promise) {
+            return derivedStore.async(async get => {
+              const currentValue = get(proxy)
+              return await derivedFn(currentValue)
+            })
+          }
+
+          return derivedStore
         }
       }
 
       if (prop === 'async') {
         return asyncFn => {
           if (target.isDerived) {
-            const get = store => {
-              const storeObj = getState(store)
-              return storeObj.value
-            }
-            asyncFn(get)
-              .then(result => {
-                console.warn(
-                  'Async operations on derived stores should update their dependencies instead'
-                )
-              })
-              .catch(error => {
-                console.error('Async derived store operation failed:', error)
-              })
-            return proxy
+            return createAsyncDerivedStore(target, asyncFn)
           }
 
           asyncFn()
@@ -353,9 +447,24 @@ export const useStore = store => {
   return [value, setValue]
 }
 
+// Individual hooks for getting just the value or setter
+export const useStoreValue = store => {
+  const subscribe = useSubscribe(store)
+  const getSnapshot = useCallback(() => {
+    const state = getState(store)
+    return state.value
+  }, [store])
+
+  return useSyncExternalStore(subscribe, getSnapshot)
+}
+
+export const useStoreSetter = store => {
+  return useSetState(getState(store), [])
+}
+
 // Utility functions for async state handling
 export const isError = data => {
-  return data && typeof data === 'object' && data.error === true
+  return typeof data === 'object' && data.error === true
 }
 
 export const isSuccess = data => {
@@ -363,7 +472,7 @@ export const isSuccess = data => {
 }
 
 export const isLoading = data => {
-  return typeof data === 'string' && data.includes('loading')
+  return typeof data === 'object' && data.loading === true
 }
 
 export const getErrorMessage = data => {

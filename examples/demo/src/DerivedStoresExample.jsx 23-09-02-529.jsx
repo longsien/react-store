@@ -6,16 +6,18 @@ import { store, useStore, useStoreValue } from '../../../src/index.js'
 // Primitive stores
 const countStore = store(0)
 const nameStore = store('John')
-const ageStore = store(get => get(countStore) + 10)
+const ageStore = store(10)
 
 // Simple derived store (read-only)
 const doubleCountStore = store(get => get(countStore) * 2)
 
+const quadrupleCountStore = store(get => get(doubleCountStore) * 2)
+
 // Complex derived store with multiple dependencies
 const userStatsStore = store(get => ({
   total: get(countStore) + get(ageStore),
-  displayName: `${get(nameStore)} (${get(ageStore)})`,
-  isAdult: get(ageStore) >= 18,
+  displayName: `${get(nameStore)} (${get(ageStore) + get(countStore)})`,
+  isAdult: get(ageStore) + get(countStore) >= 18,
 }))
 
 // ===== USER PROFILE DERIVED STORES =====
@@ -60,6 +62,7 @@ const pokemonStore = store(get => {
 function BasicDerivedStores() {
   const [count, setCount] = useStore(countStore)
   const [doubleCount] = useStore(doubleCountStore)
+  const [quadrupleCount] = useStore(quadrupleCountStore)
   const [userStats] = useStore(userStatsStore)
 
   return (
@@ -67,6 +70,7 @@ function BasicDerivedStores() {
       <h3>Basic Derived Stores</h3>
       <p>Count: {count}</p>
       <p>Double Count (derived): {doubleCount}</p>
+      <p>Quadruple Count (derived): {quadrupleCount}</p>
       <p>Total (count + age): {userStats.total}</p>
       <p>Display Name: {userStats.displayName}</p>
       <p>Is Adult: {userStats.isAdult ? 'Yes' : 'No'}</p>

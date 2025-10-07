@@ -1,5 +1,4 @@
-
-import React from 'react';
+import React from 'react'
 import { store, useStore } from '../src/index'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { describe, it, expect } from 'vitest'

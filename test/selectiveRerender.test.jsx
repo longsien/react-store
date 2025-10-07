@@ -1,4 +1,3 @@
-
 import React from 'react'
 import { store, useStore } from '../src/index'
 import { render, screen, act } from '@testing-library/react'
@@ -18,14 +17,23 @@ describe('Selective Re-renders', () => {
     function UserDisplay() {
       UserDisplayRender()
       const [user] = useStore(dataStore.user)
-      return <p>User: {user.name}, {user.age}</p>
+      return (
+        <p>
+          User: {user.name}, {user.age}
+        </p>
+      )
     }
 
     // Memoize SettingsDisplay to ensure it only re-renders if its props/subscribed state changes
     const SettingsDisplay = React.memo(function SettingsDisplay() {
       SettingsDisplayRender()
       const [settings] = useStore(dataStore.settings)
-      return <p>Theme: {settings.theme}, Notifications: {settings.notifications ? 'On' : 'Off'}</p>
+      return (
+        <p>
+          Theme: {settings.theme}, Notifications:{' '}
+          {settings.notifications ? 'On' : 'Off'}
+        </p>
+      )
     })
 
     render(

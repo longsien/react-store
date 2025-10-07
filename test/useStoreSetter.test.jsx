@@ -1,4 +1,3 @@
-
 import React from 'react'
 import { store, useStoreSetter } from '../src/index'
 import { render, fireEvent, screen } from '@testing-library/react'
@@ -10,9 +9,7 @@ describe('useStoreSetter', () => {
 
     function CounterButtons() {
       const setCount = useStoreSetter(countStore)
-      return (
-        <button onClick={() => setCount(c => c + 1)}>Increment</button>
-      )
+      return <button onClick={() => setCount(c => c + 1)}>Increment</button>
     }
 
     render(<CounterButtons />)

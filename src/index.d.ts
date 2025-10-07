@@ -90,6 +90,24 @@ export interface Store<T> {
   session(key: string): Store<T>
 
   /**
+   * Create a derived store that depends on this store's value.
+   * The derived function receives the current value and returns a new value.
+   * If the function returns a Promise, it automatically becomes an async derived store.
+   *
+   * @param derivedFn A function that receives the current value and returns a new value or Promise
+   * @returns A new derived store
+   * @example
+   * ```ts
+   * const pokemonIdStore = store(1)
+   * const pokemonDetailsStore = pokemonIdStore.derive(async (id) => {
+   *   const response = await fetch(`https://pokeapi.co/api/v2/pokemon/${id}`)
+   *   return response.json()
+   * })
+   * ```
+   */
+  derive<U>(derivedFn: (value: T) => U | Promise<U>): Store<U>
+
+  /**
    * Load data asynchronously into this store.
    * The async function is called immediately and the result updates the store.
    * On error, sets an error state object with error details.
