@@ -7,7 +7,8 @@ import {
   getErrorMessage,
   getErrorStatus,
 } from '../../../src/index.js' // import from your library
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
+import DerivedStoresExample from './DerivedStoresExample.jsx'
 
 const counterStore = store(0)
 const pokeStore = store('default initial value while loading maybe?').async(
@@ -43,6 +44,8 @@ export default function App() {
   const [theme, setTheme] = useStore(themeStore)
   const [userCount, setUserCount] = useStore(countStore)
 
+  const [showDerivedStores, setShowDerivedStores] = useState(false)
+
   useEffect(() => {
     console.log('Pokemon data:', pokemon)
   }, [pokemon])
@@ -51,10 +54,28 @@ export default function App() {
     console.log('Error data:', errorData)
   }, [errorData])
 
+  if (showDerivedStores) {
+    return (
+      <div>
+        <button onClick={() => setShowDerivedStores(false)}>
+          ← Back to Basic Examples
+        </button>
+        <DerivedStoresExample />
+      </div>
+    )
+  }
+
   // Test your library here
   return (
     <div>
-      <h1>Demo App</h1>
+      <h1>React Store Demo</h1>
+
+      <div style={{ marginBottom: '20px' }}>
+        <button onClick={() => setShowDerivedStores(true)}>
+          View Derived Stores Examples →
+        </button>
+      </div>
+
       <div>
         <h2>Counter: {count}</h2>
         <button onClick={() => setCount(count + 1)}>Increment</button>
