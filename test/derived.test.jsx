@@ -260,6 +260,92 @@ describe('Derived Stores', () => {
     })
   })
 
+  describe('derive method on stores', () => {
+    it('should create a derived store using the derive method', () => {
+      const countStore = store(0)
+      const doubleCountStore = countStore.derive(count => count * 2)
+
+      expect(doubleCountStore.get()).toBe(0)
+
+      countStore.set(5)
+      expect(doubleCountStore.get()).toBe(10)
+    })
+
+    it('should update when dependencies change using derive method', () => {
+      const countStore = store(0)
+      const doubleCountStore = countStore.derive(count => count * 2)
+
+      function TestComponent() {
+        const [count, setCount] = useStore(countStore)
+        const [doubleCount] = useStore(doubleCountStore)
+
+        return (
+          <div>
+            <p>Count: {count}</p>
+            <p>Double: {doubleCount}</p>
+            <button onClick={() => setCount(count + 1)}>Increment</button>
+          </div>
+        )
+      }
+
+      render(<TestComponent />)
+
+      expect(screen.getByText('Count: 0')).toBeInTheDocument()
+      expect(screen.getByText('Double: 0')).toBeInTheDocument()
+
+      fireEvent.click(screen.getByText('Increment'))
+
+      expect(screen.getByText('Count: 1')).toBeInTheDocument()
+      expect(screen.getByText('Double: 2')).toBeInTheDocument()
+    })
+
+    it('should handle complex derived logic with derive method', () => {
+      const userStore = store({ name: 'John', age: 25 })
+      const userInfoStore = userStore.derive(user => ({
+        ...user,
+        canVote: user.age >= 18,
+        displayName: user.name.toUpperCase(),
+      }))
+
+      expect(userInfoStore.get()).toEqual({
+        name: 'John',
+        age: 25,
+        canVote: true,
+        displayName: 'JOHN',
+      })
+
+      userStore.set({ name: 'Jane', age: 17 })
+      expect(userInfoStore.get()).toEqual({
+        name: 'Jane',
+        age: 17,
+        canVote: false,
+        displayName: 'JANE',
+      })
+    })
+
+    it('should handle chained derived stores', () => {
+      const countStore = store(0)
+      const doubleStore = countStore.derive(count => count * 2)
+      const quadrupleStore = doubleStore.derive(double => double * 2)
+
+      expect(quadrupleStore.get()).toBe(0)
+
+      countStore.set(3)
+      expect(quadrupleStore.get()).toBe(12) // 3 * 2 * 2
+    })
+
+    it('should prevent setting values on derived stores created with derive method', () => {
+      const countStore = store(0)
+      const doubleCountStore = countStore.derive(count => count * 2)
+
+      expect(() => {
+        doubleCountStore.set(10)
+      }).toThrow(
+        'Cannot set value on derived store. Derived stores are read-only.'
+      )
+    })
+  })
+
   describe('async derived stores', () => {
     it('should handle async derived stores', () => {
       const pokemonIdStore = store('pikachu')
@@ -273,6 +359,18 @@ describe('Derived Stores', () => {
       // The derived store should return a promise
       const promise = pokemonStore.get()
       expect(promise).toBeInstanceOf(Promise)
+    })
+
+    it('should handle async derived stores using derive method', () => {
+      const pokemonIdStore = store(1)
+      const pokemonDetailsStore = pokemonIdStore.derive(async id => {
+        // Mock fetch for testing
+        return { name: `Pokemon ${id}`, id, type: 'electric' }
+      })
+
+      // The derived store should return a loading state initially
+      const result = pokemonDetailsStore.get()
+      expect(result).toEqual({ loading: true })
     })
   })
 })

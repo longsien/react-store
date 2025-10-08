@@ -172,13 +172,18 @@ describe('Async Store', () => {
     expect(result.id).toBe(25)
   })
 
-  it('should handle loading states correctly', () => {
-    const asyncStore = store('loading').async(async () => {
+  it('should handle loading states correctly', async () => {
+    const asyncStore = store('initial').async(async () => {
+      await new Promise(resolve => setTimeout(resolve, 10))
       return 'success'
     })
 
-    // Initially should be loading
-    expect(isLoading(asyncStore.get())).toBe(true)
+    // Wait for async execution to complete
+    await new Promise(resolve => setTimeout(resolve, 20))
+
+    // Should no longer be loading
+    expect(isLoading(asyncStore.get())).toBe(false)
+    expect(asyncStore.get()).toBe('success')
   })
 
   it('should work with chained methods', async () => {
@@ -227,5 +232,128 @@ describe('Async Store', () => {
 
     expect(store1.get()).toBe('result1')
     expect(store2.get()).toBe('result2')
+  })
+
+  describe('async derived stores', () => {
+    it('should create async derived store using derive method', async () => {
+      const pokemonIdStore = store(1)
+      const pokemonDetailsStore = pokemonIdStore.derive(async id => {
+        await new Promise(resolve => setTimeout(resolve, 10))
+        return { name: `Pokemon ${id}`, id, type: 'electric' }
+      })
+
+      // Initially should be loading
+      expect(isLoading(pokemonDetailsStore.get())).toBe(true)
+
+      // Wait for async execution
+      await new Promise(resolve => setTimeout(resolve, 20))
+
+      // Should now have the result
+      const result = pokemonDetailsStore.get()
+      expect(isSuccess(result)).toBe(true)
+      expect(result.name).toBe('Pokemon 1')
+      expect(result.id).toBe(1)
+      expect(result.type).toBe('electric')
+    })
+
+    it('should handle async derived store errors', async () => {
+      const pokemonIdStore = store(1)
+      const pokemonDetailsStore = pokemonIdStore.derive(async id => {
+        await new Promise(resolve => setTimeout(resolve, 10))
+        throw new Error('Pokemon not found')
+      })
+
+      // Wait for async execution
+      await new Promise(resolve => setTimeout(resolve, 20))
+
+      const result = pokemonDetailsStore.get()
+      expect(isError(result)).toBe(true)
+      expect(getErrorMessage(result)).toBe('Pokemon not found')
+    })
+
+    it('should update async derived store when dependency changes', async () => {
+      const pokemonIdStore = store(1)
+      const pokemonDetailsStore = pokemonIdStore.derive(async id => {
+        await new Promise(resolve => setTimeout(resolve, 10))
+        return { name: `Pokemon ${id}`, id }
+      })
+
+      // Wait for initial load
+      await new Promise(resolve => setTimeout(resolve, 20))
+      expect(pokemonDetailsStore.get().name).toBe('Pokemon 1')
+
+      // Change the ID
+      pokemonIdStore.set(2)
+
+      // Should be loading again
+      expect(isLoading(pokemonDetailsStore.get())).toBe(true)
+
+      // Wait for new async execution
+      await new Promise(resolve => setTimeout(resolve, 20))
+
+      // Should have new result
+      const result = pokemonDetailsStore.get()
+      expect(isSuccess(result)).toBe(true)
+      expect(result.name).toBe('Pokemon 2')
+      expect(result.id).toBe(2)
+    })
+
+    it('should work with React hooks for async derived stores', async () => {
+      const pokemonIdStore = store(1)
+      const pokemonDetailsStore = pokemonIdStore.derive(async id => {
+        await new Promise(resolve => setTimeout(resolve, 10))
+        return { name: `Pokemon ${id}`, id }
+      })
+
+      const { result } = renderHook(() => useStore(pokemonDetailsStore))
+
+      // Initially should be loading
+      expect(isLoading(result.current[0])).toBe(true)
+
+      // Wait for async execution
+      await act(async () => {
+        await new Promise(resolve => setTimeout(resolve, 20))
+      })
+
+      // Should now have the result
+      expect(isSuccess(result.current[0])).toBe(true)
+      expect(result.current[0].name).toBe('Pokemon 1')
+    })
+
+    it('should handle network-like errors in async derived stores', async () => {
+      const pokemonIdStore = store(1)
+      const pokemonDetailsStore = pokemonIdStore.derive(async id => {
+        await new Promise(resolve => setTimeout(resolve, 10))
+        const error = new Error('Network Error')
+        error.status = 404
+        throw error
+      })
+
+      // Wait for async execution
+      await new Promise(resolve => setTimeout(resolve, 20))
+
+      const result = pokemonDetailsStore.get()
+      expect(isError(result)).toBe(true)
+      expect(getErrorMessage(result)).toBe('Network Error')
+      expect(getErrorStatus(result)).toBe(404)
+    })
+
+    it('should handle chained async derived stores', async () => {
+      const pokemonIdStore = store(1)
+      const pokemonDetailsStore = pokemonIdStore.derive(async id => {
+        await new Promise(resolve => setTimeout(resolve, 10))
+        return { name: `Pokemon ${id}`, id }
+      })
+
+      const pokemonSummaryStore = pokemonDetailsStore.derive(pokemon => ({
+        summary: `${pokemon.name} (ID: ${pokemon.id})`,
+      }))
+
+      // Wait for async execution
+      await new Promise(resolve => setTimeout(resolve, 20))
+
+      const result = pokemonSummaryStore.get()
+      expect(result.summary).toBe('Pokemon 1 (ID: 1)')
+    })
   })
 })

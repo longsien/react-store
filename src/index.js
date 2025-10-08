@@ -111,6 +111,7 @@ const createSetState = (state, path) => {
             const simpleGet = createSimpleGet()
             derivedStoreObj.getter(simpleGet)
           } else {
+            const simpleGet = createSimpleGet()
             computeDerivedValue(derivedStoreObj, simpleGet)
           }
         }

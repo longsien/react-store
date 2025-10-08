@@ -17,7 +17,15 @@ npm install @longsien/react-store
 ## Quick Start
 
 ```jsx
-import { store, useStore } from '@longsien/react-store'
+import {
+  store,
+  useStore,
+  isError,
+  isSuccess,
+  isLoading,
+  getErrorMessage,
+  getErrorStatus,
+} from '@longsien/react-store'
 
 // Create a store
 const counterStore = store(0)
@@ -114,6 +122,143 @@ Update value outside React components. Triggers all subscribed components to re-
 useStore.set({ name: 'Karina', age: 25 })
 useStore.name.set('Karina')
 useStore.age.set(prev => prev + 1)
+```
+
+## Derived Stores
+
+Derived stores automatically compute values based on other stores and update when their dependencies change.
+
+### Basic Derived Stores
+
+```jsx
+const counterStore = store(0)
+const doubledStore = counterStore.derive(count => count * 2)
+const isEvenStore = counterStore.derive(count => count % 2 === 0)
+
+function Counter() {
+  const [count, setCount] = useStore(counterStore)
+  const [doubled] = useStore(doubledStore)
+  const [isEven] = useStore(isEvenStore)
+
+  return (
+    <div>
+      <p>Count: {count}</p>
+      <p>Doubled: {doubled}</p>
+      <p>Is Even: {isEven ? 'Yes' : 'No'}</p>
+      <button onClick={() => setCount(count + 1)}>Increment</button>
+    </div>
+  )
+}
+```
+
+### Multi-Dependency Derived Stores
+
+```jsx
+const nameStore = store('John')
+const ageStore = store(25)
+
+const userInfoStore = store(get => ({
+  name: get(nameStore),
+  age: get(ageStore),
+  canVote: get(ageStore) >= 18,
+}))
+
+function UserInfo() {
+  const [userInfo] = useStore(userInfoStore)
+
+  return (
+    <div>
+      <p>Name: {userInfo.name}</p>
+      <p>Age: {userInfo.age}</p>
+      <p>Can Vote: {userInfo.canVote ? 'Yes' : 'No'}</p>
+    </div>
+  )
+}
+```
+
+## Async Derived Stores
+
+Async derived stores handle asynchronous operations with built-in loading, error, and success states.
+
+### Basic Async Store
+
+```jsx
+const pokemonIdStore = store(1)
+const pokemonDetailsStore = pokemonIdStore.derive(async id => {
+  const response = await fetch(`https://pokeapi.co/api/v2/pokemon/${id}`)
+  return response.json()
+})
+
+function PokemonDetails() {
+  const [pokemonId, setPokemonId] = useStore(pokemonIdStore)
+  const [pokemonDetails] = useStore(pokemonDetailsStore)
+
+  return (
+    <div>
+      <button onClick={() => setPokemonId(pokemonId + 1)}>Next Pokemon</button>
+
+      {isLoading(pokemonDetails) && <p>Loading...</p>}
+      {isError(pokemonDetails) && (
+        <p>Error: {getErrorMessage(pokemonDetails)}</p>
+      )}
+      {isSuccess(pokemonDetails) && (
+        <div>
+          <h3>{pokemonDetails.name}</h3>
+          <p>Height: {pokemonDetails.height}</p>
+          <p>Weight: {pokemonDetails.weight}</p>
+        </div>
+      )}
+    </div>
+  )
+}
+```
+
+### Async Utility Functions
+
+#### `isLoading(data)`
+
+Returns `true` if the async store is currently loading.
+
+```jsx
+{
+  isLoading(pokemonDetails) && <p>Loading Pokemon...</p>
+}
+```
+
+#### `isError(data)`
+
+Returns `true` if the async operation failed.
+
+```jsx
+{
+  isError(pokemonDetails) && <p>Error: {getErrorMessage(pokemonDetails)}</p>
+}
+```
+
+#### `isSuccess(data)`
+
+Returns `true` if the async operation completed successfully.
+
+```jsx
+{
+  isSuccess(pokemonDetails) && <div>{/* Render success content */}</div>
+}
+```
+
+#### `getErrorMessage(data)`
+
+Returns the error message from a failed async operation.
+
+```jsx
+const errorMessage = getErrorMessage(pokemonDetails)
+```
+
+#### `getErrorStatus(data)`
+
+Returns the HTTP status code from a failed async operation.
+
+```jsx
+const statusCode = getErrorStatus(pokemonDetails)
 ```
 
 ## Nested Property Access
