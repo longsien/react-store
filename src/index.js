@@ -104,14 +104,11 @@ const createSetState = (state, path) => {
       dependencyMap.get(state).forEach(derivedStore => {
         if (derivedStoreMap.has(derivedStore)) {
           const derivedStoreObj = derivedStoreMap.get(derivedStore)
-          const simpleGet = store => {
-            const storeObj = getState(store)
-            return storeObj.value
-          }
 
           // Handle async derived stores differently
           if (derivedStoreObj.isAsync) {
             // For async derived stores, trigger the getter to check for changes
+            const simpleGet = createSimpleGet()
             derivedStoreObj.getter(simpleGet)
           } else {
             computeDerivedValue(derivedStoreObj, simpleGet)
@@ -171,45 +168,79 @@ const createDerivedStore = getter => {
 
 // Create async derived store that handles async operations
 const createAsyncDerivedStore = (target, asyncFn) => {
-  const asyncStoreObj = {
-    value: { loading: true },
-    listeners: new Set(),
-    isDerived: true,
-    isAsync: true,
-    getter: get => {
-      // This will be called when dependencies change
-      return asyncStoreObj.value
-    },
-    dependencies: new Set(),
-    lastComputedValue: undefined,
-    asyncFn,
-    isRunning: false,
-    lastInputValue: undefined,
-  }
+  const asyncStoreObj = createAsyncStoreObject(asyncFn)
+  const runAsyncOperation = createAsyncOperationRunner(asyncStoreObj, asyncFn)
 
   stateMap.set(asyncStoreObj, asyncStoreObj)
   derivedStoreMap.set(asyncStoreObj, asyncStoreObj)
 
-  // Function to run the async operation
-  const runAsyncOperation = inputValue => {
+  // Override the getter to re-run async operation when dependencies change
+  asyncStoreObj.getter = get => {
+    const currentInputValue = target.getter(get)
+
+    if (!Object.is(currentInputValue, asyncStoreObj.lastInputValue)) {
+      asyncStoreObj.lastInputValue = currentInputValue
+      runAsyncOperation(currentInputValue)
+    }
+
+    return asyncStoreObj.value
+  }
+
+  // Set up dependency tracking with the original derived store
+  setupDependencyTracking(target, asyncStoreObj)
+
+  // Start the initial async operation
+  const initialInputValue = target.getter(createSimpleGet())
+  asyncStoreObj.lastInputValue = initialInputValue
+  runAsyncOperation(initialInputValue)
+
+  return createStoreProxy(asyncStoreObj)
+}
+
+// Create a simple get function for store access
+const createSimpleGet = () => store => {
+  const storeObj = getState(store)
+  return storeObj.value
+}
+
+// Set up dependency tracking between stores
+const setupDependencyTracking = (sourceStore, targetStore) => {
+  if (!dependencyMap.has(sourceStore)) {
+    dependencyMap.set(sourceStore, new Set())
+  }
+  dependencyMap.get(sourceStore).add(targetStore)
+}
+
+// Create an async store object with common properties
+const createAsyncStoreObject = asyncFn => ({
+  value: { loading: true },
+  listeners: new Set(),
+  isDerived: true,
+  isAsync: true,
+  getter: get => ({ loading: true }),
+  dependencies: new Set(),
+  lastComputedValue: undefined,
+  asyncFn,
+  isRunning: false,
+  lastInputValue: undefined,
+})
+
+// Create async operation runner
+const createAsyncOperationRunner = (asyncStoreObj, derivedFn) => {
+  return inputValue => {
     if (asyncStoreObj.isRunning) return
 
     asyncStoreObj.isRunning = true
     asyncStoreObj.value = { loading: true }
     asyncStoreObj.listeners.forEach(listener => listener())
 
-    // Create a proper get function that can access store values
-    const get = store => {
-      const storeObj = getState(store)
-      return storeObj.value
-    }
-
-    asyncFn(get)
+    derivedFn(inputValue)
       .then(result => {
         asyncStoreObj.value = result
         asyncStoreObj.lastComputedValue = result
         asyncStoreObj.isRunning = false
         asyncStoreObj.listeners.forEach(listener => listener())
+        notifyDependentStores(asyncStoreObj, createSimpleGet())
       })
       .catch(error => {
         asyncStoreObj.value = {
@@ -220,33 +251,24 @@ const createAsyncDerivedStore = (target, asyncFn) => {
         asyncStoreObj.lastComputedValue = asyncStoreObj.value
         asyncStoreObj.isRunning = false
         asyncStoreObj.listeners.forEach(listener => listener())
+        notifyDependentStores(asyncStoreObj, createSimpleGet())
       })
   }
+}
 
-  // Start the initial async operation
-  runAsyncOperation()
-
-  // Override the getter to re-run async operation when dependencies change
-  asyncStoreObj.getter = get => {
-    // Track dependencies by calling the original derived store's getter
-    const currentInputValue = target.getter(get)
-
-    // If the input value changed, re-run the async operation
-    if (!Object.is(currentInputValue, asyncStoreObj.lastInputValue)) {
-      asyncStoreObj.lastInputValue = currentInputValue
-      runAsyncOperation(currentInputValue)
-    }
-
-    return asyncStoreObj.value
+// Notify dependent derived stores of a store update
+function notifyDependentStores(storeObj, get) {
+  if (dependencyMap.has(storeObj)) {
+    dependencyMap.get(storeObj).forEach(dependentStore => {
+      if (derivedStoreMap.has(dependentStore)) {
+        const dependentStoreObj = derivedStoreMap.get(dependentStore)
+        // Only notify non-async derived stores to avoid circular dependencies
+        if (!dependentStoreObj.isAsync) {
+          computeDerivedValue(dependentStoreObj, get)
+        }
+      }
+    })
   }
-
-  // Set up dependency tracking with the original derived store
-  if (!dependencyMap.has(target)) {
-    dependencyMap.set(target, new Set())
-  }
-  dependencyMap.get(target).add(asyncStoreObj)
-
-  return createStoreProxy(asyncStoreObj)
 }
 
 // Compute derived store value and handle dependency updates
@@ -261,18 +283,11 @@ function computeDerivedValue(derivedStoreObj, get) {
       derivedStoreObj.listeners.forEach(listener => listener())
 
       // Notify other derived stores that depend on this one
-      if (dependencyMap.has(derivedStoreObj)) {
-        dependencyMap.get(derivedStoreObj).forEach(dependentStore => {
-          if (derivedStoreMap.has(dependentStore)) {
-            const dependentStoreObj = derivedStoreMap.get(dependentStore)
-            const simpleGet = store => {
-              const storeObj = getState(store)
-              return storeObj.value
-            }
-            computeDerivedValue(dependentStoreObj, simpleGet)
-          }
-        })
+      const simpleGet = store => {
+        const storeObj = getState(store)
+        return storeObj.value
       }
+      notifyDependentStores(derivedStoreObj, simpleGet)
     }
 
     return newValue
@@ -354,19 +369,56 @@ function createStoreProxy(storeObj, path = []) {
 
       if (prop === 'derive') {
         return derivedFn => {
-          // Create a derived store that depends on this store
+          // Check if the derived function is async by testing it
+          const testGet = store => {
+            const storeObj = getState(store)
+            return storeObj.value
+          }
+          const testValue = derivedFn(testGet(proxy))
+
+          // If the derived function returns a Promise, create async store directly
+          if (testValue instanceof Promise) {
+            const asyncStoreObj = createAsyncStoreObject(derivedFn)
+            const runAsyncOperation = createAsyncOperationRunner(
+              asyncStoreObj,
+              derivedFn
+            )
+
+            stateMap.set(asyncStoreObj, asyncStoreObj)
+            derivedStoreMap.set(asyncStoreObj, asyncStoreObj)
+
+            // Override the getter to re-run async operation when dependencies change
+            asyncStoreObj.getter = get => {
+              const currentInputValue = get(proxy)
+
+              if (!Object.is(currentInputValue, asyncStoreObj.lastInputValue)) {
+                asyncStoreObj.lastInputValue = currentInputValue
+                runAsyncOperation(currentInputValue)
+              }
+
+              return asyncStoreObj.value
+            }
+
+            // Set up dependency tracking
+            setupDependencyTracking(storeObj, asyncStoreObj)
+
+            // Start the initial async operation
+            const initialInputValue = getState(proxy).value
+            asyncStoreObj.lastInputValue = initialInputValue
+            runAsyncOperation(initialInputValue)
+
+            return createStoreProxy(asyncStoreObj)
+          }
+
+          // Create a regular derived store that depends on this store
           const derivedStore = store(get => {
             const currentValue = get(proxy)
             return derivedFn(currentValue)
           })
 
-          // If the derived function returns a Promise, make it async
-          if (derivedStore.get() instanceof Promise) {
-            return derivedStore.async(async get => {
-              const currentValue = get(proxy)
-              return await derivedFn(currentValue)
-            })
-          }
+          // Set up dependency tracking
+          const derivedStoreObj = getState(derivedStore)
+          setupDependencyTracking(storeObj, derivedStoreObj)
 
           return derivedStore
         }
@@ -400,8 +452,8 @@ function createStoreProxy(storeObj, path = []) {
         }
       }
 
-      if (target.isDerived) {
-        throw new Error(`Property '${prop}' not supported on derived stores`)
+      if (target.isDerived || target.isAsync) {
+        return target[prop]
       }
       return createStoreProxy(storeObj, [...path, prop])
     },
@@ -468,7 +520,7 @@ export const isError = data => {
 }
 
 export const isSuccess = data => {
-  return data && !isError(data)
+  return data && !isError(data) && !isLoading(data)
 }
 
 export const isLoading = data => {
