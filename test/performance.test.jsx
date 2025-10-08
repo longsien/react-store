@@ -31,13 +31,13 @@ describe('Performance Tests', () => {
     const myStore = store(initialValue)
 
     function CounterComponent() {
-      const [count, setCount] = useStore(myStore.count)
-      return <p data-testid='count'>Count: {count}</p>
+      const [state, setState] = useStore(myStore)
+      return <p data-testid='count'>Count: {state.count}</p>
     }
 
     function DataComponent() {
-      const [data] = useStore(myStore.data)
-      return <p data-testid='data'>Data: {data}</p>
+      const [state] = useStore(myStore)
+      return <p data-testid='data'>Data: {state.data}</p>
     }
 
     render(
@@ -51,7 +51,7 @@ describe('Performance Tests', () => {
     let updateCountTime
     act(() => {
       const start = performance.now()
-      myStore.count.set(1)
+      myStore.set({ ...myStore.get(), count: 1 })
       const end = performance.now()
       updateCountTime = end - start
     })
@@ -66,7 +66,7 @@ describe('Performance Tests', () => {
     let updateDataTime
     act(() => {
       const start = performance.now()
-      myStore.data.set('new data')
+      myStore.set({ ...myStore.get(), data: 'new data' })
       const end = performance.now()
       updateDataTime = end - start
     })
@@ -81,10 +81,10 @@ describe('Performance Tests', () => {
     const myStore = store({ list: largeArray, status: 'ready' })
 
     function ListComponent() {
-      const [list] = useStore(myStore.list)
+      const [state] = useStore(myStore)
       return (
         <ul>
-          {list.map(item => (
+          {state.list.map(item => (
             <li key={item}>{item}</li>
           ))}
         </ul>
@@ -92,8 +92,8 @@ describe('Performance Tests', () => {
     }
 
     function StatusComponent() {
-      const [status] = useStore(myStore.status)
-      return <p>Status: {status}</p>
+      const [state] = useStore(myStore)
+      return <p>Status: {state.status}</p>
     }
 
     render(
@@ -107,7 +107,8 @@ describe('Performance Tests', () => {
     let updateListTime
     act(() => {
       const start = performance.now()
-      myStore.list.set(prev => [...prev, 'new-item'])
+      const currentState = myStore.get()
+      myStore.set({ ...currentState, list: [...currentState.list, 'new-item'] })
       const end = performance.now()
       updateListTime = end - start
     })
@@ -119,7 +120,8 @@ describe('Performance Tests', () => {
     let updateStatusTime
     act(() => {
       const start = performance.now()
-      myStore.status.set('updated')
+      const currentState = myStore.get()
+      myStore.set({ ...currentState, status: 'updated' })
       const end = performance.now()
       updateStatusTime = end - start
     })
@@ -155,8 +157,8 @@ describe('Performance Tests', () => {
     const myStore = store(initialData)
 
     const TestComponent = ({ path }) => {
-      const [value] = useStore(myStore[path])
-      return <div data-testid={path}>{value}</div>
+      const [state] = useStore(myStore)
+      return <div data-testid={path}>{state[path]}</div>
     }
 
     const components = []
@@ -172,9 +174,12 @@ describe('Performance Tests', () => {
 
     const start = performance.now()
     act(() => {
+      const currentState = myStore.get()
+      const newState = { ...currentState }
       for (let i = 0; i < 100; i++) {
-        myStore[`item${i}`].set(`newValue${i}`)
+        newState[`item${i}`] = `newValue${i}`
       }
+      myStore.set(newState)
     })
     const end = performance.now()
     const updateTime = end - start

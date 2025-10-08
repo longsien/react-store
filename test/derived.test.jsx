@@ -334,15 +334,16 @@ describe('Derived Stores', () => {
       expect(quadrupleStore.get()).toBe(12) // 3 * 2 * 2
     })
 
-    it('should prevent setting values on derived stores created with derive method', () => {
+    it('should allow setting values on derived stores by updating the base store', () => {
       const countStore = store(0)
       const doubleCountStore = countStore.derive(count => count * 2)
 
-      expect(() => {
-        doubleCountStore.set(10)
-      }).toThrow(
-        'Cannot set value on derived store. Derived stores are read-only.'
-      )
+      // Setting a value on the derived store should update the base store
+      doubleCountStore.set(10)
+
+      // The base store should be updated to 10 (direct assignment)
+      expect(countStore.get()).toBe(10)
+      expect(doubleCountStore.get()).toBe(20) // 10 * 2
     })
   })
 
@@ -351,9 +352,8 @@ describe('Derived Stores', () => {
       const pokemonIdStore = store('pikachu')
       const pokemonStore = store(get => {
         const id = get(pokemonIdStore)
-        return fetch(`https://pokeapi.co/api/v2/pokemon/${id}`).then(res =>
-          res.json()
-        )
+        // Mock fetch for testing to avoid network requests
+        return Promise.resolve({ name: id, id: 25, type: 'electric' })
       })
 
       // The derived store should return a promise

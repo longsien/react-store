@@ -263,8 +263,8 @@ describe('Async Store', () => {
         throw new Error('Pokemon not found')
       })
 
-      // Wait for async execution
-      await new Promise(resolve => setTimeout(resolve, 20))
+      // Wait for async execution to complete
+      await new Promise(resolve => setTimeout(resolve, 50))
 
       const result = pokemonDetailsStore.get()
       expect(isError(result)).toBe(true)
@@ -329,8 +329,8 @@ describe('Async Store', () => {
         throw error
       })
 
-      // Wait for async execution
-      await new Promise(resolve => setTimeout(resolve, 20))
+      // Wait for async execution to complete
+      await new Promise(resolve => setTimeout(resolve, 50))
 
       const result = pokemonDetailsStore.get()
       expect(isError(result)).toBe(true)

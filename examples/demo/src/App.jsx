@@ -21,6 +21,8 @@ const pokemonStore = store().async(() =>
   fetch(`https://pokeapi.co/api/v2/pokemon/pikachu`).then(res => res.json())
 )
 
+const nestStore = store({ name: 'john', age: 30 })
+
 // App
 
 export default function App() {
@@ -33,9 +35,18 @@ export default function App() {
   // Async store values
   const [pokemon] = useStore(pokemonStore)
 
+  const [name, setName] = useStore(nestStore.name)
+  const [age, setAge] = useStore(nestStore.age)
+
   return (
     <div style={{ padding: '20px', fontFamily: 'Arial, sans-serif' }}>
       <h1>React Store Demo</h1>
+
+      <div>
+        <h2>Nested Store</h2>
+        <p>Name: {name}</p>
+        <p>Age: {age}</p>
+      </div>
 
       {/* Async store example */}
       <div>

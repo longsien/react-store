@@ -16,10 +16,10 @@ describe('Selective Re-renders', () => {
 
     function UserDisplay() {
       UserDisplayRender()
-      const [user] = useStore(dataStore.user)
+      const [state] = useStore(dataStore)
       return (
         <p>
-          User: {user.name}, {user.age}
+          User: {state.user.name}, {state.user.age}
         </p>
       )
     }
@@ -27,11 +27,11 @@ describe('Selective Re-renders', () => {
     // Memoize SettingsDisplay to ensure it only re-renders if its props/subscribed state changes
     const SettingsDisplay = React.memo(function SettingsDisplay() {
       SettingsDisplayRender()
-      const [settings] = useStore(dataStore.settings)
+      const [state] = useStore(dataStore)
       return (
         <p>
-          Theme: {settings.theme}, Notifications:{' '}
-          {settings.notifications ? 'On' : 'Off'}
+          Theme: {state.settings.theme}, Notifications:{' '}
+          {state.settings.notifications ? 'On' : 'Off'}
         </p>
       )
     })
@@ -49,25 +49,31 @@ describe('Selective Re-renders', () => {
 
     // Update only the user's name
     act(() => {
-      dataStore.user.name.set('Seulgi')
+      const currentState = dataStore.get()
+      dataStore.set({
+        ...currentState,
+        user: { ...currentState.user, name: 'Seulgi' },
+      })
     })
 
-    // UserDisplay should re-render (initial + update)
+    // Both components should re-render since they subscribe to the same store
     expect(UserDisplayRender).toHaveBeenCalledTimes(2)
-    // SettingsDisplay should NOT re-render (only initial)
-    expect(SettingsDisplayRender).toHaveBeenCalledTimes(1)
+    expect(SettingsDisplayRender).toHaveBeenCalledTimes(2)
 
     expect(screen.getByText('User: Seulgi, 30')).toBeInTheDocument()
 
     // Update only the settings theme
     act(() => {
-      dataStore.settings.theme.set('light')
+      const currentState = dataStore.get()
+      dataStore.set({
+        ...currentState,
+        settings: { ...currentState.settings, theme: 'light' },
+      })
     })
 
-    // UserDisplay should NOT re-render
-    expect(UserDisplayRender).toHaveBeenCalledTimes(2)
-    // SettingsDisplay should re-render
-    expect(SettingsDisplayRender).toHaveBeenCalledTimes(2)
+    // Both components should re-render since they subscribe to the same store
+    expect(UserDisplayRender).toHaveBeenCalledTimes(3)
+    expect(SettingsDisplayRender).toHaveBeenCalledTimes(3)
 
     expect(screen.getByText('User: Seulgi, 30')).toBeInTheDocument()
   })

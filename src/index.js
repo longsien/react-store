@@ -56,6 +56,11 @@ const getState = store => {
   return stateMap.get(store)
 }
 
+// Find the base store that a derived store depends on
+const findBaseStore = derivedStoreObj => {
+  return derivedStoreObj.baseStore
+}
+
 // Utility functions for nested object manipulation
 const getValueAtPath = (obj, path) => {
   if (path.length === 0) return obj
@@ -129,6 +134,7 @@ const createDerivedStore = getter => {
     getter,
     dependencies: new Set(),
     lastComputedValue: undefined,
+    baseStore: null, // Store reference to the base store proxy
   }
 
   stateMap.set(storeObj, storeObj)
@@ -326,7 +332,8 @@ function createStoreProxy(storeObj, path = []) {
               const storeObj = getState(store)
               return storeObj.value
             })
-            return newValue
+            // For derived stores, we need to extract the nested value from the computed result
+            return path.length > 0 ? getValueAtPath(newValue, path) : newValue
           }
           const state = getState(storeObj)
           return path.length > 0 ?
@@ -338,13 +345,23 @@ function createStoreProxy(storeObj, path = []) {
       if (prop === 'set') {
         return data => {
           if (target.isDerived) {
-            throw new Error(
-              'Cannot set value on derived store. Derived stores are read-only.'
-            )
+            // For derived stores, we need to find the base store and update it
+            // We need to update the base store that this derived store depends on
+            const baseStore = findBaseStore(target)
+            if (baseStore) {
+              const baseState = getState(baseStore)
+              const setStateFn = createSetState(baseState, path)
+              setStateFn(data)
+            } else {
+              throw new Error(
+                'Cannot set value on derived store. Derived stores are read-only.'
+              )
+            }
+          } else {
+            const state = getState(storeObj)
+            const setStateFn = createSetState(state, path)
+            setStateFn(data)
           }
-          const state = getState(storeObj)
-          const setStateFn = createSetState(state, path)
-          setStateFn(data)
         }
       }
 
@@ -419,6 +436,7 @@ function createStoreProxy(storeObj, path = []) {
 
           // Set up dependency tracking
           const derivedStoreObj = getState(derivedStore)
+          derivedStoreObj.baseStore = proxy // Store reference to the base store
           setupDependencyTracking(storeObj, derivedStoreObj)
 
           return derivedStore
@@ -453,7 +471,22 @@ function createStoreProxy(storeObj, path = []) {
         }
       }
 
-      if (target.isDerived || target.isAsync) {
+      // For derived and async stores, we still need to support nested property access
+      // Only return target[prop] for special properties that should be handled directly
+      if (
+        (target.isDerived || target.isAsync) &&
+        (prop === 'value' ||
+          prop === 'listeners' ||
+          prop === 'isDerived' ||
+          prop === 'get' ||
+          prop === 'set' ||
+          prop === 'local' ||
+          prop === 'session' ||
+          prop === 'derive' ||
+          prop === 'async' ||
+          prop === '_path' ||
+          prop === '_obj')
+      ) {
         return target[prop]
       }
       return createStoreProxy(storeObj, [...path, prop])
@@ -491,11 +524,12 @@ export const useStore = store => {
   const subscribe = useSubscribe(store)
   const getSnapshot = useCallback(() => {
     const state = getState(store)
-    return state.value
+    const path = store._path || []
+    return path.length > 0 ? getValueAtPath(state.value, path) : state.value
   }, [store])
 
   const value = useSyncExternalStore(subscribe, getSnapshot)
-  const setValue = useSetState(getState(store), [])
+  const setValue = useSetState(getState(store), store._path || [])
 
   return [value, setValue]
 }
@@ -505,14 +539,15 @@ export const useStoreValue = store => {
   const subscribe = useSubscribe(store)
   const getSnapshot = useCallback(() => {
     const state = getState(store)
-    return state.value
+    const path = store._path || []
+    return path.length > 0 ? getValueAtPath(state.value, path) : state.value
   }, [store])
 
   return useSyncExternalStore(subscribe, getSnapshot)
 }
 
 export const useStoreSetter = store => {
-  return useSetState(getState(store), [])
+  return useSetState(getState(store), store._path || [])
 }
 
 // Utility functions for async state handling
