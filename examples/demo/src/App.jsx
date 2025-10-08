@@ -17,6 +17,10 @@ const pokemonDetailsStore = pokemonIdStore.derive(async id => {
   return response.json()
 })
 
+const pokemonStore = store().async(() =>
+  fetch(`https://pokeapi.co/api/v2/pokemon/pikachu`).then(res => res.json())
+)
+
 // App
 
 export default function App() {
@@ -26,9 +30,30 @@ export default function App() {
   // Derived store values
   const [pokemonDetails] = useStore(pokemonDetailsStore)
 
+  // Async store values
+  const [pokemon] = useStore(pokemonStore)
+
   return (
     <div style={{ padding: '20px', fontFamily: 'Arial, sans-serif' }}>
       <h1>React Store Demo</h1>
+
+      {/* Async store example */}
+      <div>
+        <h2>Async Store (Pokemon)</h2>
+        {isSuccess(pokemon) && (
+          <div>
+            <p>Pokemon: {pokemon.name}</p>
+            <p>ID: {pokemon.id}</p>
+            <p>Height: {pokemon.height}</p>
+            <p>Weight: {pokemon.weight}</p>
+            <p>Types: {pokemon.types?.map(t => t.type.name).join(', ')}</p>
+            <p>
+              Abilities:{' '}
+              {pokemon.abilities?.map(a => a.ability.name).join(', ')}
+            </p>
+          </div>
+        )}
+      </div>
 
       {/* Async Pokemon Example */}
       <div>

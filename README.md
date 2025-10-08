@@ -17,15 +17,7 @@ npm install @longsien/react-store
 ## Quick Start
 
 ```jsx
-import {
-  store,
-  useStore,
-  isError,
-  isSuccess,
-  isLoading,
-  getErrorMessage,
-  getErrorStatus,
-} from '@longsien/react-store'
+import { store, useStore } from '@longsien/react-store'
 
 // Create a store
 const counterStore = store(0)
@@ -45,6 +37,48 @@ function Counter() {
 }
 ```
 
+## As Global Store
+
+You can treat a store as a global store and use it in any component without prop passing and unnecessary re-renders.
+
+```jsx
+import { store, useStore, useStoreValue } from '@longsien/react-store'
+
+// Create a store
+const personStore = store({ name: 'Hanni', origin: 'Australia' })
+
+// Updater component
+function Updater() {
+  const [name, setName] = useStore(personStore.name)
+  const [origin, setOrigin] = useStore(personStore.origin)
+
+  return (
+    <div>
+      <input type='text' value={name} onChange={e => setName(e.target.value)} />
+      <input
+        type='text'
+        value={origin}
+        onChange={e => setOrigin(e.target.value)}
+      />
+    </div>
+  )
+}
+
+// DisplayName component
+function DisplayName() {
+  const name = useStoreValue(personStore.name)
+
+  return <div>Name: {name}</div>
+}
+
+// DisplayOrigin component
+function DisplayOrigin() {
+  const origin = useStoreValue(personStore.origin)
+
+  return <div>Origin: {origin}</div>
+}
+```
+
 ## API Reference
 
 ### Store Creation
@@ -54,7 +88,7 @@ function Counter() {
 Creates a basic in-memory store that persists for the lifetime of the application session.
 
 ```jsx
-const userStore = store({ name: 'Winter', age: 24 })
+const userStore = store({ name: 'Winter', origin: 'South Korea' })
 ```
 
 #### `store(initialValue).local(key)`
@@ -82,7 +116,7 @@ Returns `[value, setState]` tuple for reading and updating state. Use exactly th
 ```jsx
 const [user, setUser] = useStore(userStore)
 const [userName, setUserName] = useStore(userStore.name)
-const [userEmail, setUserEmail] = useStore(userStore.contact.email)
+const [userOrigin, setUserOrigin] = useStore(userStore.origin)
 ```
 
 #### `useStoreValue(store)`
@@ -92,6 +126,7 @@ Returns only the current value (read-only).
 ```jsx
 const user = useStoreValue(userStore)
 const userName = useStoreValue(userStore.name)
+const userOrigin = useStoreValue(userStore.origin)
 ```
 
 #### `useStoreSetter(store)`
@@ -101,6 +136,7 @@ Returns only the setter function, avoiding unnecessary re-renders when the value
 ```jsx
 const setUser = useStoreSetter(userStore)
 const setUserName = useStoreSetter(userStore.name)
+const setUserOrigin = useStoreSetter(userStore.origin)
 ```
 
 ### Non-Hook Functions
@@ -111,7 +147,8 @@ Get current value outside React components. Useful for utility functions, event 
 
 ```jsx
 const currentUser = userStore.get()
-const useName = userStore.name.get()
+const userName = userStore.name.get()
+const userOrigin = userStore.origin.get()
 ```
 
 #### `store.set(value)`
@@ -119,9 +156,9 @@ const useName = userStore.name.get()
 Update value outside React components. Triggers all subscribed components to re-render if their specific data has changed. Accepts the same value types as the hook-based setters.
 
 ```jsx
-useStore.set({ name: 'Karina', age: 25 })
-useStore.name.set('Karina')
-useStore.age.set(prev => prev + 1)
+useStore.set({ name: 'Karina', origin: 'South Korea' })
+useStore.name.set('Ningning')
+useStore.origin.set('China')
 ```
 
 ## Derived Stores
@@ -131,20 +168,22 @@ Derived stores automatically compute values based on other stores and update whe
 ### Basic Derived Stores
 
 ```jsx
+import { store, useStore } from '@longsien/react-store'
+
 const counterStore = store(0)
 const doubledStore = counterStore.derive(count => count * 2)
-const isEvenStore = counterStore.derive(count => count % 2 === 0)
+const doubledAgainStore = doubledStore.derive(count => count * 2)
 
 function Counter() {
   const [count, setCount] = useStore(counterStore)
   const [doubled] = useStore(doubledStore)
-  const [isEven] = useStore(isEvenStore)
+  const [doubledAgain] = useStore(doubledAgainStore)
 
   return (
     <div>
       <p>Count: {count}</p>
       <p>Doubled: {doubled}</p>
-      <p>Is Even: {isEven ? 'Yes' : 'No'}</p>
+      <p>Doubled Again: {doubledAgain}</p>
       <button onClick={() => setCount(count + 1)}>Increment</button>
     </div>
   )
@@ -154,35 +193,66 @@ function Counter() {
 ### Multi-Dependency Derived Stores
 
 ```jsx
-const nameStore = store('John')
-const ageStore = store(25)
+import { store, useStore } from '@longsien/react-store'
 
-const userInfoStore = store(get => ({
+const nameStore = store('Winter')
+const originStore = store('South Korea')
+const isActiveStore = store(true)
+
+const userProfileStore = store(get => ({
   name: get(nameStore),
-  age: get(ageStore),
-  canVote: get(ageStore) >= 18,
+  origin: get(originStore),
+  isActive: get(isActiveStore),
+  displayName: `${get(nameStore)} (${get(originStore)})`,
+  status: get(isActiveStore) ? 'Online' : 'Offline',
+  canPerformActions: get(isActiveStore) && get(originStore) !== 'Unknown',
 }))
 
-function UserInfo() {
-  const [userInfo] = useStore(userInfoStore)
+function UserProfile() {
+  const [userProfile] = useStore(userProfileStore)
 
   return (
     <div>
-      <p>Name: {userInfo.name}</p>
-      <p>Age: {userInfo.age}</p>
-      <p>Can Vote: {userInfo.canVote ? 'Yes' : 'No'}</p>
+      <h3>{userProfile.displayName}</h3>
+      <p>Status: {userProfile.status}</p>
+      <p>Can perform actions: {userProfile.canPerformActions ? 'Yes' : 'No'}</p>
     </div>
   )
 }
 ```
 
-## Async Derived Stores
+## Async Stores
 
-Async derived stores handle asynchronous operations with built-in loading, error, and success states.
+Async stores handle asynchronous operations with built-in loading, error, and success states.
 
 ### Basic Async Store
 
 ```jsx
+import { store, useStoreValue, isSuccess } from '@longsien/react-store'
+
+const pokemonStore = store().async(() =>
+  fetch(`https://pokeapi.co/api/v2/pokemon/pikachu`).then(res => res.json())
+)
+
+function Pokemon() {
+  const pokemon = useStoreValue(pokemonStore)
+
+  return <div>Pokemon: {isSuccess(pokemon) && pokemon.name}</div>
+}
+```
+
+### Async Derived Store
+
+```jsx
+import {
+  store,
+  useStore,
+  isLoading,
+  isError,
+  isSuccess,
+  getErrorMessage,
+} from '@longsien/react-store'
+
 const pokemonIdStore = store(1)
 const pokemonDetailsStore = pokemonIdStore.derive(async id => {
   const response = await fetch(`https://pokeapi.co/api/v2/pokemon/${id}`)
@@ -197,13 +267,19 @@ function PokemonDetails() {
     <div>
       <button onClick={() => setPokemonId(pokemonId + 1)}>Next Pokemon</button>
 
-      {isLoading(pokemonDetails) && <p>Loading...</p>}
+      {isLoading(pokemonDetails) && <p>Loading Pokemon details...</p>}
       {isError(pokemonDetails) && (
         <p>Error: {getErrorMessage(pokemonDetails)}</p>
       )}
       {isSuccess(pokemonDetails) && (
         <div>
           <h3>{pokemonDetails.name}</h3>
+          <p>
+            <img
+              src={pokemonDetails.sprites.front_default}
+              alt={pokemonDetails.name}
+            />
+          </p>
           <p>Height: {pokemonDetails.height}</p>
           <p>Weight: {pokemonDetails.weight}</p>
         </div>
@@ -230,6 +306,8 @@ Returns `true` if the async store is currently loading.
 Returns `true` if the async operation failed.
 
 ```jsx
+import { isError, getErrorMessage } from '@longsien/react-store'
+
 {
   isError(pokemonDetails) && <p>Error: {getErrorMessage(pokemonDetails)}</p>
 }
@@ -266,17 +344,25 @@ const statusCode = getErrorStatus(pokemonDetails)
 The library uses JavaScript Proxies to enable nested property access. This allows components to subscribe to deeply nested values without re-rendering when unrelated parts of the state change.
 
 ```jsx
+import { store, useStore } from '@longsien/react-store'
+
 const userStore = store({
-  profile: { name: 'Winter', settings: { theme: 'dark' } },
+  profile: {
+    name: 'Winter',
+    origin: 'South Korea',
+    settings: { theme: 'dark' },
+  },
   posts: [],
 })
 
 // Access nested values - each creates a scoped subscription
 const [theme, setTheme] = useStore(userStore.profile.settings.theme)
+const [origin, setOrigin] = useStore(userStore.profile.origin)
 const [posts, setPosts] = useStore(userStore.posts)
 
 // Update nested values immutably
 setTheme('light') // Only components using userStore.profile.settings.theme re-render
+setOrigin('Australia') // Only components using userStore.profile.origin re-render
 setPosts(prev => [...prev, newPost]) // Only components using userStore.posts re-render
 ```
 
@@ -287,6 +373,8 @@ Nested property access works with dynamic scoping, allowing dynamic path path su
 ### Array Index Subscriptions
 
 ```jsx
+import { useStore, useStoreValue } from '@longsien/react-store'
+
 const [comment, setComment] = useStore(commentsStore[index])
 const author = useStoreValue(commentsStore[index].author)
 ```
@@ -294,6 +382,8 @@ const author = useStoreValue(commentsStore[index].author)
 ### Dynamic Object Property Subscriptions
 
 ```jsx
+import { useStore, useStoreSetter } from '@longsien/react-store'
+
 const [user, setUser] = useStore(usersStore[userId])
 const setStatus = useStoreSetter(usersStore[userId].status)
 ```
