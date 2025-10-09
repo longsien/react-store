@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useSyncExternalStore } from 'react'
+import deepEqual from './utilities/deep-equal.js'
 
 // WeakMaps for state management and derived store tracking
 const stateMap = new WeakMap()
@@ -94,7 +95,7 @@ const createSetState = (state, path) => {
         nextValueOrUpdater(currentValue)
       : nextValueOrUpdater
 
-    if (Object.is(nextValue, currentValue)) return
+    if (deepEqual(nextValue, currentValue)) return
 
     if (path.length === 0) {
       state.value = nextValue
@@ -185,7 +186,7 @@ const createAsyncDerivedStore = (target, asyncFn) => {
   asyncStoreObj.getter = get => {
     const currentInputValue = target.getter(get)
 
-    if (!Object.is(currentInputValue, asyncStoreObj.lastInputValue)) {
+    if (!deepEqual(currentInputValue, asyncStoreObj.lastInputValue)) {
       asyncStoreObj.lastInputValue = currentInputValue
       runAsyncOperation(currentInputValue)
     }
@@ -283,7 +284,7 @@ function computeDerivedValue(derivedStoreObj, get) {
   try {
     const newValue = derivedStoreObj.getter(get)
 
-    if (!Object.is(newValue, derivedStoreObj.lastComputedValue)) {
+    if (!deepEqual(newValue, derivedStoreObj.lastComputedValue)) {
       derivedStoreObj.value = newValue
       derivedStoreObj.lastComputedValue = newValue
 
@@ -409,7 +410,7 @@ function createStoreProxy(storeObj, path = []) {
             asyncStoreObj.getter = get => {
               const currentInputValue = get(proxy)
 
-              if (!Object.is(currentInputValue, asyncStoreObj.lastInputValue)) {
+              if (!deepEqual(currentInputValue, asyncStoreObj.lastInputValue)) {
                 asyncStoreObj.lastInputValue = currentInputValue
                 runAsyncOperation(currentInputValue)
               }

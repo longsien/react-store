@@ -8,6 +8,10 @@ import {
   getErrorStatus,
 } from '../../../src/index.js' // import from your library
 
+const pokemonStore = store().async(() =>
+  fetch(`https://pokeapi.co/api/v2/pokemon/pikachu`).then(res => res.json())
+)
+
 // Basic stores
 const pokemonIdStore = store(1).local('pokemon-id')
 
@@ -16,10 +20,6 @@ const pokemonDetailsStore = pokemonIdStore.derive(async id => {
   const response = await fetch(`https://pokeapi.co/api/v2/pokemon/${id}`)
   return response.json()
 })
-
-const pokemonStore = store().async(() =>
-  fetch(`https://pokeapi.co/api/v2/pokemon/pikachu`).then(res => res.json())
-)
 
 const nestStore = store({ name: 'john', age: 30 })
 

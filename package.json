@@ -1,6 +1,6 @@
 {
   "name": "@longsien/react-store",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "workspaces": [
     "examples/demo"
   ],
@@ -51,7 +51,7 @@
     "eslint-plugin-jsx-a11y": "^6.10.2",
     "eslint-plugin-prettier": "^5.5.4",
     "eslint-plugin-react": "^7.37.5",
-    "eslint-plugin-react-hooks": "^6.1.1",
+    "eslint-plugin-react-hooks": "^7.0.0",
     "happy-dom": "^19.0.2",
     "prettier": "^3.6.2",
     "typescript": "^5.9.3",
