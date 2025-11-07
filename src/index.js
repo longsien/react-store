@@ -22,10 +22,18 @@ export const store = initialValue => {
 const createStorageStore = (storageType, key, initialValue) => {
   const storage = storageType === 'local' ? localStorage : sessionStorage
 
+  // Check if key exists in storage (regardless of its value)
+  const keyExists = key in storage
+
   const getStoredValue = () => {
     try {
-      const item = storage.getItem(key)
-      return item ? JSON.parse(item) : initialValue
+      if (keyExists) {
+        const item = storage.getItem(key)
+        // If key exists, parse and return the stored value (even if it's null)
+        return JSON.parse(item)
+      }
+      // Only use initialValue if key doesn't exist
+      return initialValue
     } catch {
       return initialValue
     }
@@ -34,6 +42,19 @@ const createStorageStore = (storageType, key, initialValue) => {
   const storeObj = { value: getStoredValue(), listeners: new Set() }
   stateMap.set(storeObj, storeObj)
   const storeProxy = createStoreProxy(storeObj)
+
+  // If key didn't exist, save the initial value to storage
+  if (!keyExists) {
+    try {
+      const stringifiedValue = JSON.stringify(storeObj.value)
+      storage.setItem(key, stringifiedValue)
+    } catch (error) {
+      console.error(
+        `Failed to save initial value to storage with key "${key}":`,
+        error
+      )
+    }
+  }
 
   let saveTimeout
   storeObj.listeners.add(() => {
