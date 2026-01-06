@@ -3,13 +3,13 @@
   "type": "module",
   "dependencies": {
     "@longsien/react-store": "file:..",
-    "react": "^18",
-    "react-dom": "^18",
-    "sass": "^1.93.2"
+    "react": "^19",
+    "react-dom": "^19",
+    "sass": "^1.93.3"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "^4",
-    "vite": "^7.1.9"
+    "@vitejs/plugin-react": "^5",
+    "vite": "^7.2.1"
   },
   "scripts": {
     "dev": "vite",

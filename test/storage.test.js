@@ -1,9 +1,7 @@
 import { store } from '../src/index'
 import { describe, it, expect, beforeEach } from 'vitest'
 
-// Reset stores before each test
 beforeEach(() => {
-  // Clear local and session storage
   localStorage.clear()
   sessionStorage.clear()
 })
@@ -12,31 +10,31 @@ beforeEach(() => {
 const waitForStorage = () => new Promise(resolve => setTimeout(resolve, 10))
 
 describe('Storage Persistence', () => {
-  it('should persist to localStorage', () => {
+  it('should persist to localStorage', async () => {
     const localStore = store({ persisted: false }).local('my-key')
 
     localStore.set({ persisted: true })
 
     // Wait for the debounce
-    setTimeout(() => {
-      const fromStorage = JSON.parse(localStorage.getItem('my-key'))
-      expect(fromStorage.persisted).toBe(true)
-    }, 100)
+    await waitForStorage()
+
+    const fromStorage = JSON.parse(localStorage.getItem('my-key'))
+    expect(fromStorage.persisted).toBe(true)
   })
 
-  it('should persist to sessionStorage', () => {
+  it('should persist to sessionStorage', async () => {
     const sessionStore = store({ temp: 'data' }).session('my-session')
 
     sessionStore.set({ temp: 'new data' })
 
     // Wait for the debounce
-    setTimeout(() => {
-      const fromStorage = JSON.parse(sessionStorage.getItem('my-session'))
-      expect(fromStorage.temp).toBe('new data')
-    }, 100)
+    await waitForStorage()
+
+    const fromStorage = JSON.parse(sessionStorage.getItem('my-session'))
+    expect(fromStorage.temp).toBe('new data')
   })
 
-  it('should persist nested properties to localStorage', () => {
+  it('should persist nested properties to localStorage', async () => {
     const userStore = store({
       user: {
         name: 'John',
@@ -49,13 +47,13 @@ describe('Storage Persistence', () => {
     themeStore.set('light')
 
     // Wait for the debounce
-    setTimeout(() => {
-      const fromStorage = JSON.parse(localStorage.getItem('user-theme'))
-      expect(fromStorage).toBe('light')
-    }, 100)
+    await waitForStorage()
+
+    const fromStorage = JSON.parse(localStorage.getItem('user-theme'))
+    expect(fromStorage).toBe('light')
   })
 
-  it('should persist nested properties to sessionStorage', () => {
+  it('should persist nested properties to sessionStorage', async () => {
     const appStore = store({
       app: {
         state: 'loading',
@@ -68,15 +66,15 @@ describe('Storage Persistence', () => {
     countStore.set(42)
 
     // Wait for the debounce
-    setTimeout(() => {
-      const fromStorage = JSON.parse(sessionStorage.getItem('app-count'))
-      expect(fromStorage).toBe(42)
-    }, 100)
+    await waitForStorage()
+
+    const fromStorage = JSON.parse(sessionStorage.getItem('app-count'))
+    expect(fromStorage).toBe(42)
   })
 })
 
 describe('Storage Initial Value Handling', () => {
-  it('should use stored value and ignore initial value when key exists in localStorage', async () => {
+  it('should use stored value and ignore initial value when key exists in localStorage', () => {
     // Pre-populate storage with a value
     localStorage.setItem('existing-key', JSON.stringify({ count: 100 }))
 
@@ -87,7 +85,7 @@ describe('Storage Initial Value Handling', () => {
     expect(localStore.get()).toEqual({ count: 100 })
   })
 
-  it('should use stored value and ignore initial value when key exists in sessionStorage', async () => {
+  it('should use stored value and ignore initial value when key exists in sessionStorage', () => {
     // Pre-populate storage with a value
     sessionStorage.setItem('existing-session', JSON.stringify({ name: 'Stored' }))
 

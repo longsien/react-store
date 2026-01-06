@@ -22,15 +22,27 @@ export const store = initialValue => {
 const createStorageStore = (storageType, key, initialValue) => {
   const storage = storageType === 'local' ? localStorage : sessionStorage
 
+  // Ensure storage APIs are available
+  if (
+    !storage ||
+    typeof storage.getItem !== 'function' ||
+    typeof storage.setItem !== 'function'
+  ) {
+    throw new Error(
+      `${storageType}Storage is not available. Make sure you're running in an environment that supports storage APIs (e.g., browser).`
+    )
+  }
+
   // Check if key exists in storage (regardless of its value)
-  const keyExists = key in storage
+  // Use getItem instead of 'in' operator to work with both real and mocked storage
+  const storedItem = storage.getItem(key)
+  const keyExists = storedItem !== null
 
   const getStoredValue = () => {
     try {
       if (keyExists) {
-        const item = storage.getItem(key)
         // If key exists, parse and return the stored value (even if it's null)
-        return JSON.parse(item)
+        return JSON.parse(storedItem)
       }
       // Only use initialValue if key doesn't exist
       return initialValue
@@ -414,10 +426,33 @@ function createStoreProxy(storeObj, path = []) {
             const storeObj = getState(store)
             return storeObj.value
           }
-          const testValue = derivedFn(testGet(proxy))
+
+          let testValue
+          try {
+            testValue = derivedFn(testGet(proxy))
+          } catch (error) {
+            // If synchronous error, it's not async - create regular derived store
+            // Create a regular derived store that depends on this store
+            const derivedStore = store(get => {
+              const currentValue = get(proxy)
+              return derivedFn(currentValue)
+            })
+
+            // Set up dependency tracking
+            const derivedStoreObj = getState(derivedStore)
+            derivedStoreObj.baseStore = proxy // Store reference to the base store
+            setupDependencyTracking(storeObj, derivedStoreObj)
+
+            return derivedStore
+          }
 
           // If the derived function returns a Promise, create async store directly
           if (testValue instanceof Promise) {
+            // Catch any promise rejections from the test call to prevent unhandled rejections
+            testValue.catch(() => {
+              // Ignore test promise rejections - they'll be handled by the actual async store
+            })
+
             const asyncStoreObj = createAsyncStoreObject(derivedFn)
             const runAsyncOperation = createAsyncOperationRunner(
               asyncStoreObj,

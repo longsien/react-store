@@ -6,7 +6,9 @@ import {
   isLoading,
   getErrorMessage,
   getErrorStatus,
+  useStoreValue,
 } from '../../../src/index.js' // import from your library
+import { externalStore } from './external-store.js'
 
 const pokemonStore = store().async(() =>
   fetch(`https://pokeapi.co/api/v2/pokemon/pikachu`).then(res => res.json())
@@ -28,6 +30,7 @@ const nestStore = store({ name: 'john', age: 30 })
 export default function App() {
   // Basic store values
   const [pokemonId, setPokemonId] = useStore(pokemonIdStore)
+  const external = useStoreValue(externalStore)
 
   // Derived store values
   const [pokemonDetails] = useStore(pokemonDetailsStore)
@@ -41,6 +44,11 @@ export default function App() {
   return (
     <div style={{ padding: '20px', fontFamily: 'Arial, sans-serif' }}>
       <h1>React Store Demo</h1>
+
+      <div>
+        <h2>External Store</h2>
+        <p>Value: {external}</p>
+      </div>
 
       <div>
         <h2>Nested Store</h2>
