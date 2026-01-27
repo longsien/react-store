@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useSyncExternalStore } from 'react'
-import deepEqual from './utilities/deep-equal.js'
+import { circularDeepEqual } from 'fast-equals'
 
 // WeakMaps for state management and derived store tracking
 const stateMap = new WeakMap()
@@ -29,12 +29,11 @@ const createStorageStore = (storageType, key, initialValue) => {
     typeof storage.setItem !== 'function'
   ) {
     throw new Error(
-      `${storageType}Storage is not available. Make sure you're running in an environment that supports storage APIs (e.g., browser).`
+      `${storageType}Storage is not available. Make sure you're running in an environment that supports storage APIs (e.g., browser).`,
     )
   }
 
   // Check if key exists in storage (regardless of its value)
-  // Use getItem instead of 'in' operator to work with both real and mocked storage
   const storedItem = storage.getItem(key)
   const keyExists = storedItem !== null
 
@@ -63,13 +62,19 @@ const createStorageStore = (storageType, key, initialValue) => {
     } catch (error) {
       console.error(
         `Failed to save initial value to storage with key "${key}":`,
-        error
+        error,
       )
     }
   }
 
+  // Track if we're currently updating from storage to prevent circular updates
+  let isUpdatingFromStorage = false
+
   let saveTimeout
   storeObj.listeners.add(() => {
+    // Don't save to storage if we're updating from a storage event
+    if (isUpdatingFromStorage) return
+
     clearTimeout(saveTimeout)
     saveTimeout = setTimeout(() => {
       try {
@@ -80,6 +85,50 @@ const createStorageStore = (storageType, key, initialValue) => {
       }
     }, 0)
   })
+
+  // Listen for storage changes from other tabs/windows (localStorage)
+  if (
+    storageType === 'local' &&
+    typeof window !== 'undefined' &&
+    window.addEventListener
+  ) {
+    const handleStorageChange = event => {
+      // Only handle events for key
+      if (event.key !== key) return
+
+      // Verify the storage area matches localStorage
+      if (event.storageArea && event.storageArea !== localStorage) {
+        return
+      }
+
+      // Parse the new value from storage
+      let newValue
+      try {
+        if (event.newValue === null) {
+          // If the key was removed, fall back to initial value
+          newValue = initialValue
+        } else {
+          newValue = JSON.parse(event.newValue)
+        }
+      } catch (error) {
+        console.error(
+          `Failed to parse storage value for key "${key}" from storage event:`,
+          error,
+        )
+        return
+      }
+
+      // Only update if the value has actually changed
+      if (!circularDeepEqual(newValue, storeObj.value)) {
+        isUpdatingFromStorage = true
+        storeObj.value = newValue
+        storeObj.listeners.forEach(listener => listener())
+        isUpdatingFromStorage = false
+      }
+    }
+
+    window.addEventListener('storage', handleStorageChange)
+  }
 
   return storeProxy
 }
@@ -128,7 +177,7 @@ const createSetState = (state, path) => {
         nextValueOrUpdater(currentValue)
       : nextValueOrUpdater
 
-    if (deepEqual(nextValue, currentValue)) return
+    if (circularDeepEqual(nextValue, currentValue)) return
 
     if (path.length === 0) {
       state.value = nextValue
@@ -219,7 +268,7 @@ const createAsyncDerivedStore = (target, asyncFn) => {
   asyncStoreObj.getter = get => {
     const currentInputValue = target.getter(get)
 
-    if (!deepEqual(currentInputValue, asyncStoreObj.lastInputValue)) {
+    if (!circularDeepEqual(currentInputValue, asyncStoreObj.lastInputValue)) {
       asyncStoreObj.lastInputValue = currentInputValue
       runAsyncOperation(currentInputValue)
     }
@@ -317,7 +366,7 @@ function computeDerivedValue(derivedStoreObj, get) {
   try {
     const newValue = derivedStoreObj.getter(get)
 
-    if (!deepEqual(newValue, derivedStoreObj.lastComputedValue)) {
+    if (!circularDeepEqual(newValue, derivedStoreObj.lastComputedValue)) {
       derivedStoreObj.value = newValue
       derivedStoreObj.lastComputedValue = newValue
 
@@ -388,7 +437,7 @@ function createStoreProxy(storeObj, path = []) {
               setStateFn(data)
             } else {
               throw new Error(
-                'Cannot set value on derived store. Derived stores are read-only.'
+                'Cannot set value on derived store. Derived stores are read-only.',
               )
             }
           } else {
@@ -456,7 +505,7 @@ function createStoreProxy(storeObj, path = []) {
             const asyncStoreObj = createAsyncStoreObject(derivedFn)
             const runAsyncOperation = createAsyncOperationRunner(
               asyncStoreObj,
-              derivedFn
+              derivedFn,
             )
 
             stateMap.set(asyncStoreObj, asyncStoreObj)
@@ -466,7 +515,12 @@ function createStoreProxy(storeObj, path = []) {
             asyncStoreObj.getter = get => {
               const currentInputValue = get(proxy)
 
-              if (!deepEqual(currentInputValue, asyncStoreObj.lastInputValue)) {
+              if (
+                !circularDeepEqual(
+                  currentInputValue,
+                  asyncStoreObj.lastInputValue,
+                )
+              ) {
                 asyncStoreObj.lastInputValue = currentInputValue
                 runAsyncOperation(currentInputValue)
               }
@@ -563,7 +617,7 @@ const useSubscribe = store => {
       state.listeners.add(callback)
       return () => state.listeners.delete(callback)
     },
-    [state]
+    [state],
   )
 }
 

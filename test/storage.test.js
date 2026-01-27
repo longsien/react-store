@@ -176,3 +176,122 @@ describe('Storage Initial Value Handling', () => {
     expect(fromStorage).toBeNull()
   })
 })
+
+// Helper to create and dispatch a storage event (simulating changes from other tabs)
+// Note: Only localStorage supports cross-tab synchronization via storage events
+const dispatchStorageEvent = (key, newValue, oldValue, storageArea) => {
+  const event = new StorageEvent('storage', {
+    key,
+    newValue,
+    oldValue,
+    storageArea,
+    url: window.location.href,
+  })
+  window.dispatchEvent(event)
+}
+
+describe('Cross-Tab Synchronization (localStorage only)', () => {
+  it('should update localStorage store when storage changes in another tab', async () => {
+    const localStore = store({ count: 0 }).local('sync-key')
+
+    // Initial value
+    expect(localStore.get()).toEqual({ count: 0 })
+
+    // Simulate storage change from another tab
+    const newValue = JSON.stringify({ count: 42 })
+    localStorage.setItem('sync-key', newValue)
+    dispatchStorageEvent('sync-key', newValue, JSON.stringify({ count: 0 }), localStorage)
+
+    // Wait for event to be processed
+    await waitForStorage()
+
+    // Store should be updated
+    expect(localStore.get()).toEqual({ count: 42 })
+  })
+
+  it('should ignore storage events for different keys', async () => {
+    const localStore = store({ count: 0 }).local('my-key')
+
+    // Initial value
+    expect(localStore.get()).toEqual({ count: 0 })
+
+    // Simulate storage change for a different key
+    const newValue = JSON.stringify({ count: 100 })
+    localStorage.setItem('other-key', newValue)
+    dispatchStorageEvent('other-key', newValue, null, localStorage)
+
+    // Wait for event to be processed
+    await waitForStorage()
+
+    // Store should NOT be updated
+    expect(localStore.get()).toEqual({ count: 0 })
+  })
+
+  it('should handle storage event when key is removed (null value)', async () => {
+    const localStore = store({ count: 42 }).local('removed-key')
+
+    // Set initial value
+    localStore.set({ count: 42 })
+    await waitForStorage()
+
+    // Simulate key removal from another tab
+    localStorage.removeItem('removed-key')
+    dispatchStorageEvent('removed-key', null, JSON.stringify({ count: 42 }), localStorage)
+
+    // Wait for event to be processed
+    await waitForStorage()
+
+    // Store should fall back to initial value
+    expect(localStore.get()).toEqual({ count: 42 })
+  })
+
+  it('should not trigger save when updating from storage event', async () => {
+    const localStore = store({ count: 0 }).local('no-loop-key')
+
+    // Initial value
+    expect(localStore.get()).toEqual({ count: 0 })
+    await waitForStorage()
+
+    // Clear storage to track if it gets written again
+    localStorage.removeItem('no-loop-key')
+
+    // Simulate storage change from another tab
+    const newValue = JSON.stringify({ count: 99 })
+    localStorage.setItem('no-loop-key', newValue)
+    dispatchStorageEvent('no-loop-key', newValue, JSON.stringify({ count: 0 }), localStorage)
+
+    // Wait for event to be processed
+    await waitForStorage()
+
+    // Store should be updated
+    expect(localStore.get()).toEqual({ count: 99 })
+
+    // The value should still be in storage (not cleared by our update)
+    const fromStorage = JSON.parse(localStorage.getItem('no-loop-key'))
+    expect(fromStorage).toEqual({ count: 99 })
+  })
+
+  it('should handle multiple stores with different keys', async () => {
+    const store1 = store({ a: 1 }).local('key1')
+    const store2 = store({ b: 2 }).local('key2')
+
+    // Initial values
+    expect(store1.get()).toEqual({ a: 1 })
+    expect(store2.get()).toEqual({ b: 2 })
+
+    // Simulate storage changes for both keys
+    const newValue1 = JSON.stringify({ a: 10 })
+    const newValue2 = JSON.stringify({ b: 20 })
+    localStorage.setItem('key1', newValue1)
+    localStorage.setItem('key2', newValue2)
+    dispatchStorageEvent('key1', newValue1, JSON.stringify({ a: 1 }), localStorage)
+    dispatchStorageEvent('key2', newValue2, JSON.stringify({ b: 2 }), localStorage)
+
+    // Wait for events to be processed
+    await waitForStorage()
+
+    // Both stores should be updated independently
+    expect(store1.get()).toEqual({ a: 10 })
+    expect(store2.get()).toEqual({ b: 20 })
+  })
+})

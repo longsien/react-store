@@ -25,6 +25,11 @@ const pokemonDetailsStore = pokemonIdStore.derive(async id => {
 
 const nestStore = store({ name: 'john', age: 30 })
 
+// Cross-tab sync store
+const syncStore = store({ message: 'Hello from tab!', count: 0 }).local(
+  'cross-tab-sync',
+)
+
 // App
 
 export default function App() {
@@ -41,6 +46,9 @@ export default function App() {
   const [name, setName] = useStore(nestStore.name)
   const [age, setAge] = useStore(nestStore.age)
 
+  // Cross-tab sync store
+  const [syncData, setSyncData] = useStore(syncStore)
+
   return (
     <div style={{ padding: '20px', fontFamily: 'Arial, sans-serif' }}>
       <h1>React Store Demo</h1>
@@ -54,6 +62,90 @@ export default function App() {
         <h2>Nested Store</h2>
         <p>Name: {name}</p>
         <p>Age: {age}</p>
+      </div>
+
+      {/* Cross-tab synchronization example */}
+      <div
+        style={{
+          border: '2px solid #4CAF50',
+          borderRadius: '8px',
+          padding: '15px',
+          marginTop: '20px',
+          backgroundColor: '#f0f8f0',
+        }}
+      >
+        <h2>Cross-Tab Synchronization (localStorage)</h2>
+        <p style={{ fontSize: '14px', color: '#666', fontStyle: 'italic' }}>
+          💡 Open this page in multiple tabs to see changes sync automatically!
+        </p>
+        <div style={{ marginTop: '15px' }}>
+          <div style={{ marginBottom: '10px' }}>
+            <label style={{ display: 'block', marginBottom: '5px' }}>
+              Message:
+            </label>
+            <input
+              type="text"
+              value={syncData.message}
+              onChange={e =>
+                setSyncData({ ...syncData, message: e.target.value })
+              }
+              style={{
+                padding: '8px',
+                width: '300px',
+                fontSize: '14px',
+                border: '1px solid #ccc',
+                borderRadius: '4px',
+              }}
+            />
+          </div>
+          <div style={{ marginBottom: '10px' }}>
+            <label style={{ display: 'block', marginBottom: '5px' }}>
+              Count: {syncData.count}
+            </label>
+            <div>
+              <button
+                onClick={() =>
+                  setSyncData({ ...syncData, count: syncData.count - 1 })
+                }
+                style={{
+                  padding: '8px 16px',
+                  marginRight: '10px',
+                  fontSize: '14px',
+                  cursor: 'pointer',
+                }}
+              >
+                -
+              </button>
+              <button
+                onClick={() =>
+                  setSyncData({ ...syncData, count: syncData.count + 1 })
+                }
+                style={{
+                  padding: '8px 16px',
+                  fontSize: '14px',
+                  cursor: 'pointer',
+                }}
+              >
+                +
+              </button>
+            </div>
+          </div>
+          <div
+            style={{
+              marginTop: '15px',
+              padding: '10px',
+              backgroundColor: '#fff',
+              borderRadius: '4px',
+              border: '1px solid #ddd',
+            }}
+          >
+            <p>
+              <strong>Current values:</strong>
+            </p>
+            <p>Message: "{syncData.message}"</p>
+            <p>Count: {syncData.count}</p>
+          </div>
+        </div>
       </div>
 
       {/* Async store example */}
