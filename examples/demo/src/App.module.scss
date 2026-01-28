@@ -1,0 +1,202 @@
+// Main container
+.container {
+  padding: 20px;
+  font-family: Arial, sans-serif;
+}
+
+// Section headers
+.sectionTitle {
+  margin-top: 0;
+}
+
+// Cross-tab sync section
+.crossTabSection {
+  border: 2px solid #4caf50;
+  border-radius: 8px;
+  padding: 15px;
+  margin-top: 20px;
+  background-color: #f0f8f0;
+}
+
+.crossTabHint {
+  font-size: 14px;
+  color: #666;
+  font-style: italic;
+}
+
+.crossTabContent {
+  margin-top: 15px;
+}
+
+.crossTabField {
+  margin-bottom: 10px;
+}
+
+.crossTabLabel {
+  display: block;
+  margin-bottom: 5px;
+}
+
+.crossTabInput {
+  padding: 8px;
+  width: 300px;
+  font-size: 14px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+.crossTabButton {
+  padding: 8px 16px;
+  margin-right: 10px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.crossTabButtonLast {
+  padding: 8px 16px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.crossTabValues {
+  margin-top: 15px;
+  padding: 10px;
+  background-color: #fff;
+  border-radius: 4px;
+  border: 1px solid #ddd;
+}
+
+// Nested cross-tab sync section
+.nestedCrossTabSection {
+  border: 2px solid #2196f3;
+  border-radius: 8px;
+  padding: 15px;
+  margin-top: 20px;
+  background-color: #f0f4ff;
+}
+
+.nestedCrossTabHint {
+  font-size: 14px;
+  color: #666;
+  font-style: italic;
+}
+
+.nestedCrossTabContent {
+  margin-top: 15px;
+}
+
+.nestedCrossTabGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-bottom: 20px;
+}
+
+.nestedCrossTabInstructions {
+  margin-top: 20px;
+  padding: 10px;
+  background-color: #fff;
+  border-radius: 4px;
+  border: 1px solid #ddd;
+  font-size: 12px;
+  color: #666;
+}
+
+.nestedCrossTabInstructionsTitle {
+  margin: 5px 0;
+  font-weight: bold;
+}
+
+.nestedCrossTabInstructionsList {
+  margin: 5px 0;
+  padding-left: 20px;
+}
+
+.nestedCrossTabLastField {
+  margin-top: 20px;
+}
+
+// Component with counter
+.componentWithCounter {
+  padding: 15px;
+  background-color: #fff;
+  border-radius: 4px;
+  border: 2px solid;
+  position: relative;
+}
+
+.renderCounter {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  color: white;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: bold;
+}
+
+// Field components
+.fieldTitle {
+  margin-top: 0;
+}
+
+.fieldGroup {
+  margin-bottom: 10px;
+}
+
+.fieldLabel {
+  display: block;
+  margin-bottom: 5px;
+}
+
+.fieldInput {
+  padding: 6px;
+  width: 100%;
+  font-size: 14px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+.fieldInputReadOnly {
+  padding: 6px;
+  width: 100%;
+  font-size: 14px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background-color: #f5f5f5;
+}
+
+.fieldSelect {
+  padding: 6px;
+  width: 100%;
+  font-size: 14px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+.fieldCheckboxLabel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fieldCheckbox {
+  cursor: pointer;
+}
+
+.fieldHint {
+  color: #666;
+  display: block;
+  margin-top: 5px;
+}
+
+.fieldText {
+  margin: 0;
+  font-size: 14px;
+}
+
+// Error styles
+.errorContainer {
+  color: red;
+}

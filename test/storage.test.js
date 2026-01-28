@@ -294,4 +294,91 @@ describe('Cross-Tab Synchronization (localStorage only)', () => {
     expect(store1.get()).toEqual({ a: 10 })
     expect(store2.get()).toEqual({ b: 20 })
   })
+
+  it('should preserve object references for unchanged nested paths', async () => {
+    const testStore = store({
+      user: { name: 'John', age: 30 },
+      settings: { theme: 'dark' },
+    }).local('nested-sync')
+
+    // Get initial references
+    const initialUser = testStore.user.get()
+    const initialSettings = testStore.settings.get()
+
+    // Simulate storage change that only updates settings, not user
+    const newValue = JSON.stringify({
+      user: { name: 'John', age: 30 }, // Same user data
+      settings: { theme: 'light' }, // Changed settings
+    })
+    localStorage.setItem(
+      'nested-sync',
+      JSON.stringify({
+        user: { name: 'John', age: 30 },
+        settings: { theme: 'dark' },
+      }),
+    )
+    dispatchStorageEvent(
+      'nested-sync',
+      newValue,
+      JSON.stringify({
+        user: { name: 'John', age: 30 },
+        settings: { theme: 'dark' },
+      }),
+      localStorage,
+    )
+
+    // Wait for event to be processed
+    await waitForStorage()
+
+    // User object reference should be preserved (same object)
+    const updatedUser = testStore.user.get()
+    expect(updatedUser).toBe(initialUser) // Same reference
+    expect(updatedUser).toEqual({ name: 'John', age: 30 }) // Same content
+
+    // Settings object reference should change (different content)
+    const updatedSettings = testStore.settings.get()
+    expect(updatedSettings).not.toBe(initialSettings) // Different reference
+    expect(updatedSettings).toEqual({ theme: 'light' }) // Updated content
+  })
+
+  it('should preserve references when new keys are added', async () => {
+    const testStore = store({
+      user: { name: 'John', age: 30 },
+    }).local('add-key-sync')
+
+    // Get initial reference
+    const initialUser = testStore.user.get()
+
+    // Simulate storage change that adds a new key but user stays the same
+    const newValue = JSON.stringify({
+      user: { name: 'John', age: 30 }, // Same user data
+      settings: { theme: 'dark' }, // New key added
+    })
+    localStorage.setItem(
+      'add-key-sync',
+      JSON.stringify({
+        user: { name: 'John', age: 30 },
+      }),
+    )
+    dispatchStorageEvent(
+      'add-key-sync',
+      newValue,
+      JSON.stringify({
+        user: { name: 'John', age: 30 },
+      }),
+      localStorage,
+    )
+
+    // Wait for event to be processed
+    await waitForStorage()
+
+    // User object reference should still be preserved even though root structure changed
+    const updatedUser = testStore.user.get()
+    expect(updatedUser).toBe(initialUser) // Same reference
+    expect(updatedUser).toEqual({ name: 'John', age: 30 }) // Same content
+
+    // New key should be present
+    expect(testStore.get()).toHaveProperty('settings')
+    expect(testStore.settings.get()).toEqual({ theme: 'dark' })
+  })
 })

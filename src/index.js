@@ -121,7 +121,9 @@ const createStorageStore = (storageType, key, initialValue) => {
       // Only update if the value has actually changed
       if (!circularDeepEqual(newValue, storeObj.value)) {
         isUpdatingFromStorage = true
-        storeObj.value = newValue
+        // Preserve object references for unchanged nested paths to prevent
+        // unnecessary re-renders for components listening to nested properties
+        storeObj.value = preserveReferences(storeObj.value, newValue)
         storeObj.listeners.forEach(listener => listener())
         isUpdatingFromStorage = false
       }
@@ -164,6 +166,80 @@ const setValueAtPath = (obj, path, value) => {
   const [key, ...remaining] = path
   newObj[key] = setValueAtPath(obj?.[key] || {}, remaining, value)
   return newObj
+}
+
+// Preserve object references when nested values haven't changed
+// This prevents unnecessary re-renders for components listening to nested paths
+const preserveReferences = (oldValue, newValue) => {
+  // If values are equal by reference, return old value
+  if (oldValue === newValue) return oldValue
+
+  // If either is null/undefined or not an object, return new value
+  if (
+    oldValue == null ||
+    newValue == null ||
+    typeof oldValue !== 'object' ||
+    typeof newValue !== 'object'
+  ) {
+    return newValue
+  }
+
+  // If types don't match, return new value
+  if (Array.isArray(oldValue) !== Array.isArray(newValue)) {
+    return newValue
+  }
+
+  // For arrays, preserve references for unchanged items
+  if (Array.isArray(newValue)) {
+    if (oldValue.length !== newValue.length) {
+      return newValue
+    }
+    let hasChanges = false
+    const preserved = newValue.map((item, index) => {
+      const preservedItem = preserveReferences(oldValue[index], item)
+      if (preservedItem !== oldValue[index]) hasChanges = true
+      return preservedItem
+    })
+    // If nothing changed, return old array to preserve reference
+    return hasChanges ? preserved : oldValue
+  }
+
+  // For objects, preserve references for unchanged properties
+  const oldKeys = Object.keys(oldValue)
+  const newKeys = Object.keys(newValue)
+  const allKeys = new Set([...oldKeys, ...newKeys])
+
+  // Check if structure changed (keys added/removed)
+  const structureChanged = oldKeys.length !== newKeys.length
+
+  let hasChanges = false
+  const preserved = {}
+  for (const key of allKeys) {
+    if (!(key in newValue)) {
+      // Key was removed
+      hasChanges = true
+      continue
+    }
+    if (!(key in oldValue)) {
+      // Key was added
+      preserved[key] = newValue[key]
+      hasChanges = true
+      continue
+    }
+    // Key exists in both - preserve reference if unchanged
+    const preservedValue = preserveReferences(oldValue[key], newValue[key])
+    preserved[key] = preservedValue
+    if (preservedValue !== oldValue[key]) {
+      hasChanges = true
+    }
+  }
+
+  // If structure changed or values changed, return new object (but with preserved nested references)
+  // If nothing changed at all, return old object to preserve root reference
+  if (structureChanged || hasChanges) {
+    return preserved
+  }
+  return oldValue
 }
 
 // Create setState function
