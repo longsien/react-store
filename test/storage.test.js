@@ -381,4 +381,57 @@ describe('Cross-Tab Synchronization (localStorage only)', () => {
     expect(testStore.get()).toHaveProperty('settings')
     expect(testStore.settings.get()).toEqual({ theme: 'dark' })
   })
+
+  it('should update derived stores when storage event occurs', async () => {
+    const localStore = store({ count: 0 }).local('derived-sync-key')
+    const derivedStore = store(get => ({ doubled: get(localStore).count * 2 }))
+
+    // Initial values
+    expect(localStore.get()).toEqual({ count: 0 })
+    expect(derivedStore.get()).toEqual({ doubled: 0 })
+
+    // Simulate storage change from another tab
+    const newValue = JSON.stringify({ count: 21 })
+    localStorage.setItem('derived-sync-key', newValue)
+    dispatchStorageEvent(
+      'derived-sync-key',
+      newValue,
+      JSON.stringify({ count: 0 }),
+      localStorage,
+    )
+
+    await waitForStorage()
+
+    // Both base and derived store should be updated
+    expect(localStore.get()).toEqual({ count: 21 })
+    expect(derivedStore.get()).toEqual({ doubled: 42 })
+  })
+
+  it('should update derived stores created with .derive() when storage event occurs', async () => {
+    const localStore = store({ count: 0 }).local('derive-sync-key')
+    const derivedStore = localStore.derive(value => ({
+      doubled: value.count * 2,
+      label: `Count × 2 = ${value.count * 2}`,
+    }))
+
+    // Initial values
+    expect(localStore.get()).toEqual({ count: 0 })
+    expect(derivedStore.get()).toEqual({ doubled: 0, label: 'Count × 2 = 0' })
+
+    // Simulate storage change from another tab
+    const newValue = JSON.stringify({ count: 5 })
+    localStorage.setItem('derive-sync-key', newValue)
+    dispatchStorageEvent(
+      'derive-sync-key',
+      newValue,
+      JSON.stringify({ count: 0 }),
+      localStorage,
+    )
+
+    await waitForStorage()
+
+    // Both base and derived store should be updated
+    expect(localStore.get()).toEqual({ count: 5 })
+    expect(derivedStore.get()).toEqual({ doubled: 10, label: 'Count × 2 = 10' })
+  })
 })

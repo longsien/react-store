@@ -4,9 +4,22 @@ A lightweight, proxy-based global state management library for React.
 
 ## Features
 
-- **Lightweight**: Minimal footprint with zero dependencies beyond React
+- **Lightweight**: Minimal footprint with only one dependency beyond React (`fast-equals`)
 - **Proxy-based**: JavaScript Proxy enables nested property access with path tracking
-- **Dynamic Scoping**: Components automatically subscribe only to specific array indices or object properties they access
+- **Dynamic Scoping**: Components automatically subscribe only to the specific array indices or object properties they access, so unrelated updates never re-render them
+- **Derived stores**: Compute values from one or more stores; subscribers only re-render when the derived value actually changes
+- **Async stores**: First-class loading / error / success handling for data fetching, including async derived stores that re-run when their inputs change
+- **Persistence**: Back any store with `localStorage`, `sessionStorage`, or IndexedDB, with automatic JSON serialization and cross-tab synchronization for `localStorage`
+- **No provider, no boilerplate**: Stores are plain module-level values usable from any component or from outside React entirely
+
+## Live Demo
+
+The [`examples/demo`](examples/demo) directory contains a small window manager (draggable / resizable windows, a taskbar, and virtual "spaces") built entirely on this library. It is the clearest demonstration of why derived stores matter — see [Why Derived Stores?](#why-derived-stores) below. Run it with:
+
+```bash
+npm install
+npm run demo
+```
 
 ## Installation
 
@@ -98,10 +111,12 @@ const userStore = store({ name: 'Winter', origin: 'South Korea' })
 
 #### `store(initialValue).local(key)`
 
-Creates a store backed by localStorage with automatic persistence. Data is automatically serialized to JSON when saving and deserialized when loading.
+Creates a store backed by localStorage with automatic persistence. Data is automatically serialized to JSON when saving and deserialized when loading. If the key already exists in storage, the stored value is used and the initial value is ignored.
+
+localStorage-backed stores also **synchronize across tabs**: when another tab writes to the same key, the store updates and re-renders subscribers. Object references for unchanged nested paths are preserved during the sync so only the components reading changed paths re-render.
 
 ```jsx
-// Store with localStorage persistence
+// Store with localStorage persistence (and cross-tab sync)
 const settingsStore = store({ theme: 'dark' }).local('settings')
 ```
 
@@ -112,6 +127,17 @@ Creates a store backed by sessionStorage with automatic persistence. Data is aut
 ```jsx
 // Store with sessionStorage persistence
 const tempStore = store({ items: [] }).session('temp-data')
+```
+
+#### `store(initialValue).index(storeName, dbName?)`
+
+Creates a store backed by IndexedDB. The initial value is used synchronously until the asynchronous read completes, after which the persisted value (if any) is loaded in. `dbName` defaults to `'react-store'`.
+
+```jsx
+// Store with IndexedDB persistence
+const docsStore = store({ drafts: [] }).index('documents')
+// Custom database name
+const usersStore = store({ name: 'Winter' }).index('users', 'my-app')
 ```
 
 ### Hooks
@@ -168,14 +194,81 @@ Update value outside React components. Triggers all subscribed components to re-
 
 ```jsx
 // Update values outside React components
-useStore.set({ name: 'Karina', origin: 'South Korea' })
-useStore.name.set('Ningning')
-useStore.origin.set('China')
+userStore.set({ name: 'Karina', origin: 'South Korea' })
+userStore.name.set('Ningning')
+userStore.origin.set('China')
+```
+
+#### `store.destroy()`
+
+Cleans up resources held by a store — removes the cross-tab `storage` listener for `localStorage` stores, closes the IndexedDB connection, clears pending save timers, and unregisters derived stores from their dependencies. Call it when a dynamically created store is no longer needed. Module-level stores that live for the lifetime of the app generally don't need this.
+
+```jsx
+const settingsStore = store({ theme: 'dark' }).local('app-settings')
+// Later, when no longer needed:
+settingsStore.destroy()
 ```
 
 ## Derived Stores
 
-Derived stores automatically compute values based on other stores and update when their dependencies change.
+Derived stores automatically compute values based on other stores and update when their dependencies change. A derived store re-runs its getter when a dependency changes, but only notifies its own subscribers when the **computed value** actually changes (by deep equality). This makes them the primary tool for minimizing re-renders.
+
+### Why Derived Stores?
+
+Dynamic scoping already lets a component subscribe to a single nested path. Derived stores go further: they let a component subscribe to a **computed projection** of state — a list of keys, a boolean, a sum — and re-render only when that projection changes, no matter how often the underlying store churns.
+
+The [window manager demo](examples/demo) shows two cases where this is the difference between a smooth UI and one that re-renders everything on every mouse move.
+
+**1. Subscribing to the _shape_ of a store, not its contents.**
+
+All open windows live in one store, keyed by id. Each window's `position`, `size`, and `zIndex` update many times per second while dragging or resizing. The component that renders the list of windows only cares about _which_ windows exist — not their contents. A derived store projects the store down to its keys, returning the **same array reference** when the set of keys hasn't changed:
+
+```jsx
+export const windowsStore = store({}).local('wm-windows')
+
+let cachedIds = []
+export const windowIdsStore = windowsStore.derive(windows => {
+  const keys = Object.keys(windows)
+  // Return the cached reference when the id set is unchanged so subscribers
+  // don't re-render on every position/size update inside a window.
+  if (keys.length === cachedIds.length && keys.every((id, i) => id === cachedIds[i]))
+    return cachedIds
+  cachedIds = keys
+  return keys
+})
+
+const WindowManager = () => {
+  // Re-renders only when a window is opened or closed — never while dragging.
+  const windowIds = useStoreValue(windowIdsStore)
+  return windowIds.map(id => <Window key={id} id={id} />)
+}
+```
+
+Without the derived store, `WindowManager` would subscribe to `windowsStore` directly and re-render the entire window list on every drag frame.
+
+**2. Fanning a shared value out into per-item slices.**
+
+There is a single `focusedWindowStore` holding the id of the focused window. If every window subscribed to it directly, focusing one window would re-render _all_ of them. Instead, each window derives its own boolean. When focus moves from A to B, only A's and B's derived values flip from/to `true` — every other window's derived value stays `false`, so it doesn't re-render:
+
+```jsx
+export const focusedWindowStore = store(null)
+
+const focusCache = new Map()
+export const getWindowFocusStore = id => {
+  if (!focusCache.has(id)) {
+    focusCache.set(id, focusedWindowStore.derive(focusedId => focusedId === id))
+  }
+  return focusCache.get(id)
+}
+
+const Window = ({ id }) => {
+  // Only the two windows whose focus actually changed re-render.
+  const isFocused = useStoreValue(getWindowFocusStore(id))
+  // ...
+}
+```
+
+The takeaway: **reach for a derived store whenever a component depends on a function of state rather than the raw state.** Deep-equality gating on the computed result is what keeps re-renders proportional to meaningful changes instead of to write frequency.
 
 ### Basic Derived Stores
 

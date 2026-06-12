@@ -125,11 +125,153 @@ const createStorageStore = (storageType, key, initialValue) => {
         // unnecessary re-renders for components listening to nested properties
         storeObj.value = preserveReferences(storeObj.value, newValue)
         storeObj.listeners.forEach(listener => listener())
+
+        // Notify derived stores that depend on this store
+        if (dependencyMap.has(storeObj)) {
+          dependencyMap.get(storeObj).forEach(derivedStore => {
+            if (derivedStoreMap.has(derivedStore)) {
+              const derivedStoreObj = derivedStoreMap.get(derivedStore)
+
+              // Handle async derived stores differently
+              if (derivedStoreObj.isAsync) {
+                derivedStoreObj.getter(simpleGet)
+              } else {
+                computeDerivedValue(derivedStoreObj, simpleGet)
+              }
+            }
+          })
+        }
+
         isUpdatingFromStorage = false
       }
     }
 
     window.addEventListener('storage', handleStorageChange)
+
+    storeObj._cleanup = () => {
+      window.removeEventListener('storage', handleStorageChange)
+      clearTimeout(saveTimeout)
+    }
+  } else {
+    storeObj._cleanup = () => {
+      clearTimeout(saveTimeout)
+    }
+  }
+
+  return storeProxy
+}
+
+const INDEX_DB_STORE_KEY = 'value'
+
+const openDB = (dbName, storeName) => {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(dbName)
+
+    request.onupgradeneeded = event => {
+      const db = event.target.result
+      if (!db.objectStoreNames.contains(storeName)) {
+        db.createObjectStore(storeName)
+      }
+    }
+
+    request.onerror = () => reject(request.error)
+
+    request.onsuccess = () => {
+      const db = request.result
+      if (db.objectStoreNames.contains(storeName)) {
+        resolve(db)
+      } else {
+        const newVersion = db.version + 1
+        db.close()
+        const upgradeRequest = indexedDB.open(dbName, newVersion)
+        upgradeRequest.onupgradeneeded = event => {
+          event.target.result.createObjectStore(storeName)
+        }
+        upgradeRequest.onerror = () => reject(upgradeRequest.error)
+        upgradeRequest.onsuccess = () => resolve(upgradeRequest.result)
+      }
+    }
+  })
+}
+
+const idbGet = (db, storeName) => {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, 'readonly')
+    const request = tx.objectStore(storeName).get(INDEX_DB_STORE_KEY)
+    request.onerror = () => reject(request.error)
+    request.onsuccess = () => resolve(request.result)
+  })
+}
+
+const idbPut = (db, storeName, value) => {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, 'readwrite')
+    const request = tx.objectStore(storeName).put(value, INDEX_DB_STORE_KEY)
+    request.onerror = () => reject(request.error)
+    request.onsuccess = () => resolve()
+  })
+}
+
+const createIndexStore = (storeName, dbName, initialValue) => {
+  if (typeof indexedDB === 'undefined') {
+    throw new Error(
+      "IndexedDB is not available. Make sure you're running in an environment that supports IndexedDB (e.g., browser).",
+    )
+  }
+
+  const storeObj = { value: initialValue, listeners: new Set() }
+  stateMap.set(storeObj, storeObj)
+  const storeProxy = createStoreProxy(storeObj)
+
+  let db = null
+  let saveTimeout
+
+  storeObj.listeners.add(() => {
+    if (!db) return
+    clearTimeout(saveTimeout)
+    saveTimeout = setTimeout(() => {
+      idbPut(db, storeName, storeObj.value).catch(error => {
+        console.error(
+          `Failed to save to IndexedDB store "${storeName}":`,
+          error,
+        )
+      })
+    }, 0)
+  })
+
+  openDB(dbName, storeName)
+    .then(database => {
+      db = database
+      return idbGet(database, storeName)
+    })
+    .then(existingValue => {
+      if (existingValue !== undefined) {
+        if (!circularDeepEqual(existingValue, storeObj.value)) {
+          storeObj.value = preserveReferences(storeObj.value, existingValue)
+          storeObj.listeners.forEach(listener => listener())
+        }
+      } else {
+        idbPut(db, storeName, storeObj.value).catch(error => {
+          console.error(
+            `Failed to save initial value to IndexedDB store "${storeName}":`,
+            error,
+          )
+        })
+      }
+    })
+    .catch(error => {
+      console.error(
+        `Failed to initialize IndexedDB store "${storeName}":`,
+        error,
+      )
+    })
+
+  storeObj._cleanup = () => {
+    clearTimeout(saveTimeout)
+    if (db) {
+      db.close()
+      db = null
+    }
   }
 
   return storeProxy
@@ -164,7 +306,16 @@ const setValueAtPath = (obj, path, value) => {
   }
 
   const [key, ...remaining] = path
-  newObj[key] = setValueAtPath(obj?.[key] || {}, remaining, value)
+  // When the intermediate value is missing, create an array if the next path
+  // segment is a numeric index, otherwise an object.
+  const existing = obj[key]
+  const child =
+    existing == null ?
+      /^\d+$/.test(String(remaining[0])) ?
+        []
+      : {}
+    : existing
+  newObj[key] = setValueAtPath(child, remaining, value)
   return newObj
 }
 
@@ -191,55 +342,41 @@ const preserveReferences = (oldValue, newValue) => {
 
   // For arrays, preserve references for unchanged items
   if (Array.isArray(newValue)) {
-    if (oldValue.length !== newValue.length) {
-      return newValue
-    }
-    let hasChanges = false
+    const minLength = Math.min(oldValue.length, newValue.length)
+    let hasChanges = oldValue.length !== newValue.length
     const preserved = newValue.map((item, index) => {
-      const preservedItem = preserveReferences(oldValue[index], item)
-      if (preservedItem !== oldValue[index]) hasChanges = true
-      return preservedItem
+      if (index < minLength) {
+        const preservedItem = preserveReferences(oldValue[index], item)
+        if (preservedItem !== oldValue[index]) hasChanges = true
+        return preservedItem
+      }
+      return item
     })
-    // If nothing changed, return old array to preserve reference
     return hasChanges ? preserved : oldValue
   }
 
   // For objects, preserve references for unchanged properties
-  const oldKeys = Object.keys(oldValue)
   const newKeys = Object.keys(newValue)
-  const allKeys = new Set([...oldKeys, ...newKeys])
-
-  // Check if structure changed (keys added/removed)
-  const structureChanged = oldKeys.length !== newKeys.length
 
   let hasChanges = false
   const preserved = {}
-  for (const key of allKeys) {
-    if (!(key in newValue)) {
-      // Key was removed
-      hasChanges = true
-      continue
-    }
-    if (!(key in oldValue)) {
-      // Key was added
+  for (const key of newKeys) {
+    if (key in oldValue) {
+      const preservedValue = preserveReferences(oldValue[key], newValue[key])
+      preserved[key] = preservedValue
+      if (preservedValue !== oldValue[key]) hasChanges = true
+    } else {
       preserved[key] = newValue[key]
-      hasChanges = true
-      continue
-    }
-    // Key exists in both - preserve reference if unchanged
-    const preservedValue = preserveReferences(oldValue[key], newValue[key])
-    preserved[key] = preservedValue
-    if (preservedValue !== oldValue[key]) {
       hasChanges = true
     }
   }
 
-  // If structure changed or values changed, return new object (but with preserved nested references)
-  // If nothing changed at all, return old object to preserve root reference
-  if (structureChanged || hasChanges) {
-    return preserved
+  // Check for removed keys (only if key count differs for early exit)
+  if (Object.keys(oldValue).length !== newKeys.length) {
+    hasChanges = true
   }
-  return oldValue
+
+  return hasChanges ? preserved : oldValue
 }
 
 // Create setState function
@@ -272,10 +409,8 @@ const createSetState = (state, path) => {
           // Handle async derived stores differently
           if (derivedStoreObj.isAsync) {
             // For async derived stores, trigger the getter to check for changes
-            const simpleGet = createSimpleGet()
             derivedStoreObj.getter(simpleGet)
           } else {
-            const simpleGet = createSimpleGet()
             computeDerivedValue(derivedStoreObj, simpleGet)
           }
         }
@@ -317,6 +452,14 @@ const createDerivedStore = getter => {
 
   const computeValue = () => {
     try {
+      // Remove stale dependency reverse-mappings before rebuilding
+      for (const dep of storeObj.dependencies) {
+        const depSet = dependencyMap.get(dep)
+        if (depSet) {
+          depSet.delete(storeObj)
+          if (depSet.size === 0) dependencyMap.delete(dep)
+        }
+      }
       storeObj.dependencies.clear()
       const newValue = getter(get)
       storeObj.lastComputedValue = newValue
@@ -329,7 +472,29 @@ const createDerivedStore = getter => {
 
   storeObj.value = computeValue()
 
+  // Unregister this derived store from its dependencies' reverse-mappings
+  // so it can be garbage collected once destroyed.
+  storeObj._cleanup = () => {
+    for (const dep of storeObj.dependencies) {
+      const depSet = dependencyMap.get(dep)
+      if (depSet) {
+        depSet.delete(storeObj)
+        if (depSet.size === 0) dependencyMap.delete(dep)
+      }
+    }
+    storeObj.dependencies.clear()
+  }
+
   return createStoreProxy(storeObj)
+}
+
+// Remove an async/derived store from a single source's reverse-mapping
+const unregisterDependent = (sourceStoreObj, dependentStoreObj) => {
+  const depSet = dependencyMap.get(sourceStoreObj)
+  if (depSet) {
+    depSet.delete(dependentStoreObj)
+    if (depSet.size === 0) dependencyMap.delete(sourceStoreObj)
+  }
 }
 
 // Create async derived store that handles async operations
@@ -355,16 +520,18 @@ const createAsyncDerivedStore = (target, asyncFn) => {
   // Set up dependency tracking with the original derived store
   setupDependencyTracking(target, asyncStoreObj)
 
+  asyncStoreObj._cleanup = () => unregisterDependent(target, asyncStoreObj)
+
   // Start the initial async operation
-  const initialInputValue = target.getter(createSimpleGet())
+  const initialInputValue = target.getter(simpleGet)
   asyncStoreObj.lastInputValue = initialInputValue
   runAsyncOperation(initialInputValue)
 
   return createStoreProxy(asyncStoreObj)
 }
 
-// Create a simple get function for store access
-const createSimpleGet = () => store => {
+// Shared get function for store access (stateless, no allocation needed)
+const simpleGet = store => {
   const storeObj = getState(store)
   return storeObj.value
 }
@@ -389,13 +556,12 @@ const createAsyncStoreObject = asyncFn => ({
   asyncFn,
   isRunning: false,
   lastInputValue: undefined,
+  pendingInputValue: undefined,
 })
 
 // Create async operation runner
 const createAsyncOperationRunner = (asyncStoreObj, derivedFn) => {
-  return inputValue => {
-    if (asyncStoreObj.isRunning) return
-
+  const run = inputValue => {
     asyncStoreObj.isRunning = true
     asyncStoreObj.value = { loading: true }
     asyncStoreObj.listeners.forEach(listener => listener())
@@ -406,7 +572,8 @@ const createAsyncOperationRunner = (asyncStoreObj, derivedFn) => {
         asyncStoreObj.lastComputedValue = result
         asyncStoreObj.isRunning = false
         asyncStoreObj.listeners.forEach(listener => listener())
-        notifyDependentStores(asyncStoreObj, createSimpleGet())
+        notifyDependentStores(asyncStoreObj, simpleGet)
+        flushPending()
       })
       .catch(error => {
         asyncStoreObj.value = {
@@ -417,8 +584,28 @@ const createAsyncOperationRunner = (asyncStoreObj, derivedFn) => {
         asyncStoreObj.lastComputedValue = asyncStoreObj.value
         asyncStoreObj.isRunning = false
         asyncStoreObj.listeners.forEach(listener => listener())
-        notifyDependentStores(asyncStoreObj, createSimpleGet())
+        notifyDependentStores(asyncStoreObj, simpleGet)
+        flushPending()
       })
+  }
+
+  const flushPending = () => {
+    if (asyncStoreObj.pendingInputValue !== undefined) {
+      const pending = asyncStoreObj.pendingInputValue
+      asyncStoreObj.pendingInputValue = undefined
+      if (!circularDeepEqual(pending, asyncStoreObj.lastInputValue)) {
+        asyncStoreObj.lastInputValue = pending
+        run(pending)
+      }
+    }
+  }
+
+  return inputValue => {
+    if (asyncStoreObj.isRunning) {
+      asyncStoreObj.pendingInputValue = inputValue
+      return
+    }
+    run(inputValue)
   }
 }
 
@@ -428,8 +615,11 @@ function notifyDependentStores(storeObj, get) {
     dependencyMap.get(storeObj).forEach(dependentStore => {
       if (derivedStoreMap.has(dependentStore)) {
         const dependentStoreObj = derivedStoreMap.get(dependentStore)
-        // Only notify non-async derived stores to avoid circular dependencies
-        if (!dependentStoreObj.isAsync) {
+        if (dependentStoreObj.isAsync) {
+          // Re-run the async getter; it no-ops unless its input changed,
+          // so this is safe against cycles and propagates async-of-async chains.
+          dependentStoreObj.getter(simpleGet)
+        } else {
           computeDerivedValue(dependentStoreObj, get)
         }
       }
@@ -448,11 +638,6 @@ function computeDerivedValue(derivedStoreObj, get) {
 
       derivedStoreObj.listeners.forEach(listener => listener())
 
-      // Notify other derived stores that depend on this one
-      const simpleGet = store => {
-        const storeObj = getState(store)
-        return storeObj.value
-      }
       notifyDependentStores(derivedStoreObj, simpleGet)
     }
 
@@ -464,6 +649,8 @@ function computeDerivedValue(derivedStoreObj, get) {
 }
 
 // Create store proxy with nested property access
+const MAX_PROXY_CACHE_SIZE = 500
+
 function createStoreProxy(storeObj, path = []) {
   const pathKey = path.join('.')
 
@@ -474,23 +661,41 @@ function createStoreProxy(storeObj, path = []) {
   }
 
   if (pathCache.has(pathKey)) {
-    return pathCache.get(pathKey)
+    // Refresh LRU recency: re-insert so hot paths (e.g. the root) survive eviction
+    const cached = pathCache.get(pathKey)
+    pathCache.delete(pathKey)
+    pathCache.set(pathKey, cached)
+    return cached
+  }
+
+  // Prevent unbounded cache growth for dynamic paths by evicting the
+  // least-recently-used entry (Map preserves insertion/refresh order).
+  if (pathCache.size >= MAX_PROXY_CACHE_SIZE) {
+    const oldestKey = pathCache.keys().next().value
+    pathCache.delete(oldestKey)
   }
 
   const proxy = new Proxy(storeObj, {
     get(target, prop) {
+      if (typeof prop === 'symbol') return undefined
       if (prop === '_path') return path
       if (prop === '_obj') return storeObj
       if (prop === 'value' || prop === 'listeners') return target[prop]
       if (prop === 'isDerived') return target.isDerived || false
 
+      if (prop === 'destroy') {
+        return () => {
+          if (storeObj._cleanup) {
+            storeObj._cleanup()
+            storeObj._cleanup = null
+          }
+        }
+      }
+
       if (prop === 'get') {
         return () => {
           if (target.isDerived) {
-            const newValue = computeDerivedValue(target, store => {
-              const storeObj = getState(store)
-              return storeObj.value
-            })
+            const newValue = computeDerivedValue(target, simpleGet)
             // For derived stores, we need to extract the nested value from the computed result
             return path.length > 0 ? getValueAtPath(newValue, path) : newValue
           }
@@ -544,40 +749,21 @@ function createStoreProxy(storeObj, path = []) {
         }
       }
 
+      if (prop === 'index') {
+        return (storeName, dbName = 'react-store') => {
+          const currentValue =
+            path.length > 0 ?
+              getValueAtPath(storeObj.value, path)
+            : storeObj.value
+          return createIndexStore(storeName, dbName, currentValue)
+        }
+      }
+
       if (prop === 'derive') {
         return derivedFn => {
-          // Check if the derived function is async by testing it
-          const testGet = store => {
-            const storeObj = getState(store)
-            return storeObj.value
-          }
+          const isAsync = derivedFn.constructor?.name === 'AsyncFunction'
 
-          let testValue
-          try {
-            testValue = derivedFn(testGet(proxy))
-          } catch (error) {
-            // If synchronous error, it's not async - create regular derived store
-            // Create a regular derived store that depends on this store
-            const derivedStore = store(get => {
-              const currentValue = get(proxy)
-              return derivedFn(currentValue)
-            })
-
-            // Set up dependency tracking
-            const derivedStoreObj = getState(derivedStore)
-            derivedStoreObj.baseStore = proxy // Store reference to the base store
-            setupDependencyTracking(storeObj, derivedStoreObj)
-
-            return derivedStore
-          }
-
-          // If the derived function returns a Promise, create async store directly
-          if (testValue instanceof Promise) {
-            // Catch any promise rejections from the test call to prevent unhandled rejections
-            testValue.catch(() => {
-              // Ignore test promise rejections - they'll be handled by the actual async store
-            })
-
+          if (isAsync) {
             const asyncStoreObj = createAsyncStoreObject(derivedFn)
             const runAsyncOperation = createAsyncOperationRunner(
               asyncStoreObj,
@@ -607,6 +793,9 @@ function createStoreProxy(storeObj, path = []) {
             // Set up dependency tracking
             setupDependencyTracking(storeObj, asyncStoreObj)
 
+            asyncStoreObj._cleanup = () =>
+              unregisterDependent(storeObj, asyncStoreObj)
+
             // Start the initial async operation
             const initialInputValue = getState(proxy).value
             asyncStoreObj.lastInputValue = initialInputValue
@@ -623,7 +812,7 @@ function createStoreProxy(storeObj, path = []) {
 
           // Set up dependency tracking
           const derivedStoreObj = getState(derivedStore)
-          derivedStoreObj.baseStore = proxy // Store reference to the base store
+          derivedStoreObj.baseStore = proxy
           setupDependencyTracking(storeObj, derivedStoreObj)
 
           return derivedStore
@@ -669,8 +858,10 @@ function createStoreProxy(storeObj, path = []) {
           prop === 'set' ||
           prop === 'local' ||
           prop === 'session' ||
+          prop === 'index' ||
           prop === 'derive' ||
           prop === 'async' ||
+          prop === 'destroy' ||
           prop === '_path' ||
           prop === '_obj')
       ) {
@@ -698,12 +889,7 @@ const useSubscribe = store => {
 }
 
 const useSetState = (state, path) => {
-  return useMemo(() => {
-    return nextValueOrUpdater => {
-      const setStateFn = createSetState(state, path)
-      setStateFn(nextValueOrUpdater)
-    }
-  }, [state, path])
+  return useMemo(() => createSetState(state, path), [state, path])
 }
 
 // Main React hook for using stores
@@ -739,15 +925,15 @@ export const useStoreSetter = store => {
 
 // Utility functions for async state handling
 export const isError = data => {
-  return typeof data === 'object' && data.error === true
+  return data != null && typeof data === 'object' && data.error === true
 }
 
 export const isSuccess = data => {
-  return data && !isError(data) && !isLoading(data)
+  return data != null && !isError(data) && !isLoading(data)
 }
 
 export const isLoading = data => {
-  return typeof data === 'object' && data.loading === true
+  return data != null && typeof data === 'object' && data.loading === true
 }
 
 export const getErrorMessage = data => {

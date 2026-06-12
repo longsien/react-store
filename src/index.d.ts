@@ -90,6 +90,23 @@ export interface Store<T> {
   session(key: string): Store<T>
 
   /**
+   * Create an IndexedDB-backed version of this store.
+   * Data is automatically persisted and restored across browser sessions.
+   * Supports cross-tab synchronization via BroadcastChannel.
+   * Initial value is used until the async IndexedDB read completes.
+   *
+   * @param storeName The IndexedDB object store name
+   * @param dbName Optional database name (defaults to 'react-store')
+   * @returns A new store instance backed by IndexedDB
+   * @example
+   * ```ts
+   * const settingsStore = store({ theme: 'dark' }).index('settings')
+   * const userStore = store({ name: 'John' }).index('users', 'my-app')
+   * ```
+   */
+  index(storeName: string, dbName?: string): Store<T>
+
+  /**
    * Create a derived store that depends on this store's value.
    * The derived function receives the current value and returns a new value.
    * If the function returns a Promise, it automatically becomes an async derived store.
@@ -129,6 +146,20 @@ export interface Store<T> {
    * ```
    */
   async(asyncFn: () => Promise<T>): Store<T>
+
+  /**
+   * Clean up resources associated with this store.
+   * Removes event listeners (e.g., storage cross-tab sync) and clears pending timers.
+   * Call this when the store is no longer needed to prevent memory leaks.
+   *
+   * @example
+   * ```ts
+   * const settingsStore = store({ theme: 'dark' }).local('app-settings')
+   * // Later, when no longer needed:
+   * settingsStore.destroy()
+   * ```
+   */
+  destroy(): void
 }
 
 /**
@@ -240,54 +271,6 @@ export function useStoreValue<T>(store: Store<T>): T
  * ```
  */
 export function useStoreSetter<T>(store: Store<T>): StoreSetter<T>
-
-// Legacy API (deprecated but maintained for backward compatibility)
-
-/**
- * @deprecated Use `store.get()` instead. Will be removed in v2.
- *
- * Get the current value of a store outside React components.
- *
- * @template T The type of the stored value
- * @param store The store to get the value from
- * @returns The current value
- */
-export function getStore<T>(store: Store<T>): T
-
-/**
- * @deprecated Use `store.set()` instead. Will be removed in v2.
- *
- * Update a store value outside React components.
- *
- * @template T The type of the stored value
- * @param store The store to update
- * @param value The new value or updater function
- */
-export function setStore<T>(store: Store<T>, value: SetStateAction<T>): void
-
-/**
- * @deprecated Use `store(initialValue).session(key)` instead. Will be removed in v2.
- *
- * Create a store backed by sessionStorage.
- *
- * @template T The type of the initial value
- * @param key The sessionStorage key
- * @param initialValue The initial value if nothing is stored
- * @returns A Store proxy backed by sessionStorage
- */
-export function storeSession<T>(key: string, initialValue: T): StoreProxy<T>
-
-/**
- * @deprecated Use `store(initialValue).local(key)` instead. Will be removed in v2.
- *
- * Create a store backed by localStorage.
- *
- * @template T The type of the initial value
- * @param key The localStorage key
- * @param initialValue The initial value if nothing is stored
- * @returns A Store proxy backed by localStorage
- */
-export function storeLocal<T>(key: string, initialValue: T): StoreProxy<T>
 
 // Type augmentation for dynamic property access on arrays and objects
 declare global {
