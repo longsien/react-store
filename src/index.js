@@ -101,15 +101,13 @@ const createStorageStore = (storageType, key, initialValue) => {
         return
       }
 
+      // Key removed: keep in-memory state
+      if (event.newValue === null) return
+
       // Parse the new value from storage
       let newValue
       try {
-        if (event.newValue === null) {
-          // If the key was removed, fall back to initial value
-          newValue = initialValue
-        } else {
-          newValue = JSON.parse(event.newValue)
-        }
+        newValue = JSON.parse(event.newValue)
       } catch (error) {
         console.error(
           `Failed to parse storage value for key "${key}" from storage event:`,
