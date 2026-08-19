@@ -227,10 +227,10 @@ describe('Cross-Tab Synchronization (localStorage only)', () => {
     expect(localStore.get()).toEqual({ count: 0 })
   })
 
-  it('should handle storage event when key is removed (null value)', async () => {
-    const localStore = store({ count: 42 }).local('removed-key')
+  it('should keep in-memory state when key is removed (null value)', async () => {
+    const localStore = store({ count: 0 }).local('removed-key')
 
-    // Set initial value
+    // Set new value
     localStore.set({ count: 42 })
     await waitForStorage()
 
@@ -241,7 +241,7 @@ describe('Cross-Tab Synchronization (localStorage only)', () => {
     // Wait for event to be processed
     await waitForStorage()
 
-    // Store should fall back to initial value
+    // Store should NOT be updated
     expect(localStore.get()).toEqual({ count: 42 })
   })
 
