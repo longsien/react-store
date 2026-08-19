@@ -1,5 +1,95 @@
 import { useCallback, useMemo, useSyncExternalStore } from 'react'
-import { circularDeepEqual } from 'fast-equals'
+import { createCustomEqual } from 'fast-equals'
+
+// Opaque binary values (Blob/File, ArrayBuffer, typed arrays, DataView) are
+// persisted as-is by IndexedDB's structured clone, but they can't be
+// meaningfully deep-compared (a Blob has no enumerable keys, and any deep-equal
+// result is environment-dependent) or recursed into. Treat them as
+// identity-compared leaves wherever values are compared or reference-preserved.
+const isOpaqueValue = value => {
+  if (value == null || typeof value !== 'object') return false
+  if (typeof Blob !== 'undefined' && value instanceof Blob) return true
+  if (typeof ArrayBuffer !== 'undefined') {
+    if (value instanceof ArrayBuffer) return true
+    if (ArrayBuffer.isView(value)) return true
+  }
+  return false
+}
+
+// Deep equality that matches circularDeepEqual for plain data, but compares
+// opaque binary values by reference identity at any nesting depth.
+const customDeepEqual = createCustomEqual({
+  circular: true,
+  createInternalComparator: compare => (a, b, _ka, _kb, _pa, _pb, state) =>
+    isOpaqueValue(a) || isOpaqueValue(b) ? a === b : compare(a, b, state),
+})
+
+const valuesEqual = (a, b) =>
+  isOpaqueValue(a) || isOpaqueValue(b) ? a === b : customDeepEqual(a, b)
+
+// One level deep: identical keys, each value compared by identity.
+const shallowEqual = (a, b) => {
+  if (Object.is(a, b)) return true
+  if (
+    a == null ||
+    b == null ||
+    typeof a !== 'object' ||
+    typeof b !== 'object'
+  ) {
+    return false
+  }
+  if (Array.isArray(a) !== Array.isArray(b)) return false
+
+  const keysA = Object.keys(a)
+  if (keysA.length !== Object.keys(b).length) return false
+
+  for (const key of keysA) {
+    if (!Object.prototype.hasOwnProperty.call(b, key)) return false
+    if (!Object.is(a[key], b[key])) return false
+  }
+  return true
+}
+
+// Deep equality is the default: it stops a re-render when a freshly built object
+// holds identical data, which is the common case with immutable updates. But it
+// costs O(size) on every write, so a large state that is replaced wholesale can
+// opt down to a cheaper comparison.
+const EQUALITY_PRESETS = {
+  deep: valuesEqual,
+  shallow: shallowEqual,
+  reference: (a, b) => Object.is(a, b),
+}
+
+const resolveEquals = equals => {
+  if (equals == null) return valuesEqual
+  if (typeof equals === 'function') return equals
+
+  const preset = EQUALITY_PRESETS[equals]
+  if (!preset) {
+    throw new Error(
+      `Unknown equality option "${equals}". Use 'deep', 'shallow', 'reference', or a comparison function.`,
+    )
+  }
+  return preset
+}
+
+// Stores created before equality was configurable, and internal bookkeeping
+// objects, fall back to the default.
+const equalsFor = storeObj => storeObj.equals || valuesEqual
+
+// Serialize a value for localStorage/sessionStorage, which can only hold JSON.
+// Binary values can't survive JSON.stringify (a Blob becomes {}, a typed array
+// becomes an index map), so fail loudly and point users at .index() instead of
+// silently dropping their data.
+const stringifyForStorage = (value, storageType, key) =>
+  JSON.stringify(value, (_k, v) => {
+    if (isOpaqueValue(v)) {
+      throw new Error(
+        `Cannot persist binary values (Blob/File/ArrayBuffer/typed array) to ${storageType}Storage for key "${key}". Use .index() (IndexedDB) for binary data.`,
+      )
+    }
+    return v
+  })
 
 // WeakMaps for state management and derived store tracking
 const stateMap = new WeakMap()
@@ -8,9 +98,45 @@ const dependencyMap = new WeakMap()
 const derivedStoreMap = new WeakMap()
 
 // Main store creation function
-export const store = initialValue => {
+export const store = (initialValue, options = {}) => {
   if (typeof initialValue === 'function') {
-    return createDerivedStore(initialValue)
+    return createDerivedStore(initialValue, options)
+  }
+
+  const storeObj = {
+    value: initialValue,
+    listeners: new Set(),
+    equals: resolveEquals(options.equals),
+  }
+  stateMap.set(storeObj, storeObj)
+  return createStoreProxy(storeObj)
+}
+
+// Reading a bare `localStorage`/`sessionStorage` identifier throws a
+// ReferenceError where the global is absent (any server-side render), which
+// would escape before the availability check below could report anything
+// useful. Going through globalThis yields undefined instead, and the property
+// read itself can throw in sandboxed iframes or with storage access blocked.
+const getStorage = storageType => {
+  const globalName =
+    storageType === 'local' ? 'localStorage' : 'sessionStorage'
+  try {
+    return typeof globalThis === 'undefined' ? null : globalThis[globalName]
+  } catch {
+    return null
+  }
+}
+
+// Fall back to a plain in-memory store when a persistence backend is missing.
+// Throwing instead would make the library unusable with server-side rendering,
+// where the very same module-level `store(x).local(key)` runs with no storage
+// at all. Degrading lets the server render the initial value and the client
+// hydrate to the persisted one. The warning is browser-only: there, missing
+// storage is a real problem worth surfacing, whereas on a server it is expected
+// and would just spam the logs on every render.
+const createUnpersistedStore = (initialValue, reason) => {
+  if (typeof window !== 'undefined') {
+    console.warn(reason)
   }
 
   const storeObj = { value: initialValue, listeners: new Set() }
@@ -19,8 +145,8 @@ export const store = initialValue => {
 }
 
 // Create storage-backed stores (localStorage/sessionStorage)
-const createStorageStore = (storageType, key, initialValue) => {
-  const storage = storageType === 'local' ? localStorage : sessionStorage
+const createStorageStore = (storageType, key, initialValue, options = {}) => {
+  const storage = getStorage(storageType)
 
   // Ensure storage APIs are available
   if (
@@ -28,13 +154,21 @@ const createStorageStore = (storageType, key, initialValue) => {
     typeof storage.getItem !== 'function' ||
     typeof storage.setItem !== 'function'
   ) {
-    throw new Error(
-      `${storageType}Storage is not available. Make sure you're running in an environment that supports storage APIs (e.g., browser).`,
+    return createUnpersistedStore(
+      initialValue,
+      `${storageType}Storage is not available, so "${key}" will not persist. This store will keep its value in memory only.`,
     )
   }
 
-  // Check if key exists in storage (regardless of its value)
-  const storedItem = storage.getItem(key)
+  // Check if key exists in storage (regardless of its value). Reading can throw
+  // when storage access is blocked, which should degrade to the initial value
+  // rather than take down store creation.
+  let storedItem = null
+  try {
+    storedItem = storage.getItem(key)
+  } catch (error) {
+    console.error(`Failed to read from storage with key "${key}":`, error)
+  }
   const keyExists = storedItem !== null
 
   const getStoredValue = () => {
@@ -50,14 +184,29 @@ const createStorageStore = (storageType, key, initialValue) => {
     }
   }
 
-  const storeObj = { value: getStoredValue(), listeners: new Set() }
+  // A server render has no storage to read, so it produces the initial value.
+  // Pinning it here keeps the hydration snapshot matching the server HTML; React
+  // switches to the stored value on the first client render after hydration.
+  const storeObj = {
+    value: getStoredValue(),
+    listeners: new Set(),
+    serverValue: initialValue,
+    equals: resolveEquals(options.equals),
+  }
   stateMap.set(storeObj, storeObj)
   const storeProxy = createStoreProxy(storeObj)
 
-  // If key didn't exist, save the initial value to storage
+  // Writes are debounced. The default of 0 coalesces everything within a tick;
+  // a larger interval coalesces bursts (dragging, typing) into a single write,
+  // which matters because each one re-serializes the whole state.
+  const saveDelay = options.debounce ?? 0
+
+  // If key didn't exist, save the initial value to storage. Serialize outside
+  // the try so an opaque-value error surfaces synchronously at creation rather
+  // than being swallowed as a generic save failure.
   if (!keyExists) {
+    const stringifiedValue = stringifyForStorage(storeObj.value, storageType, key)
     try {
-      const stringifiedValue = JSON.stringify(storeObj.value)
       storage.setItem(key, stringifiedValue)
     } catch (error) {
       console.error(
@@ -70,21 +219,39 @@ const createStorageStore = (storageType, key, initialValue) => {
   // Track if we're currently updating from storage to prevent circular updates
   let isUpdatingFromStorage = false
 
-  let saveTimeout
-  storeObj.listeners.add(() => {
+  let saveTimeout = null
+
+  const saveNow = () => {
+    clearTimeout(saveTimeout)
+    saveTimeout = null
+    try {
+      const stringifiedValue = stringifyForStorage(
+        storeObj.value,
+        storageType,
+        key,
+      )
+      storage.setItem(key, stringifiedValue)
+    } catch (error) {
+      console.error(`Failed to save to storage with key "${key}":`, error)
+    }
+  }
+
+  const saveListener = () => {
     // Don't save to storage if we're updating from a storage event
     if (isUpdatingFromStorage) return
 
     clearTimeout(saveTimeout)
-    saveTimeout = setTimeout(() => {
-      try {
-        const stringifiedValue = JSON.stringify(storeObj.value)
-        storage.setItem(key, stringifiedValue)
-      } catch (error) {
-        console.error(`Failed to save to storage with key "${key}":`, error)
-      }
-    }, 0)
-  })
+    saveTimeout = setTimeout(saveNow, saveDelay)
+  }
+  storeObj.listeners.add(saveListener)
+
+  // Flush the debounced write before tearing down — otherwise `set()` followed
+  // by `destroy()` silently loses the write — then unsubscribe, so a destroyed
+  // store stops persisting later updates.
+  const teardown = () => {
+    if (saveTimeout !== null) saveNow()
+    storeObj.listeners.delete(saveListener)
+  }
 
   // Listen for storage changes from other tabs/windows (localStorage)
   if (
@@ -101,15 +268,13 @@ const createStorageStore = (storageType, key, initialValue) => {
         return
       }
 
+      // Key removed: keep in-memory state
+      if (event.newValue === null) return
+
       // Parse the new value from storage
       let newValue
       try {
-        if (event.newValue === null) {
-          // If the key was removed, fall back to initial value
-          newValue = initialValue
-        } else {
-          newValue = JSON.parse(event.newValue)
-        }
+        newValue = JSON.parse(event.newValue)
       } catch (error) {
         console.error(
           `Failed to parse storage value for key "${key}" from storage event:`,
@@ -119,28 +284,14 @@ const createStorageStore = (storageType, key, initialValue) => {
       }
 
       // Only update if the value has actually changed
-      if (!circularDeepEqual(newValue, storeObj.value)) {
+      if (!equalsFor(storeObj)(newValue, storeObj.value)) {
         isUpdatingFromStorage = true
         // Preserve object references for unchanged nested paths to prevent
         // unnecessary re-renders for components listening to nested properties
         storeObj.value = preserveReferences(storeObj.value, newValue)
         storeObj.listeners.forEach(listener => listener())
 
-        // Notify derived stores that depend on this store
-        if (dependencyMap.has(storeObj)) {
-          dependencyMap.get(storeObj).forEach(derivedStore => {
-            if (derivedStoreMap.has(derivedStore)) {
-              const derivedStoreObj = derivedStoreMap.get(derivedStore)
-
-              // Handle async derived stores differently
-              if (derivedStoreObj.isAsync) {
-                derivedStoreObj.getter(simpleGet)
-              } else {
-                computeDerivedValue(derivedStoreObj, simpleGet)
-              }
-            }
-          })
-        }
+        notifyDependentStores(storeObj, simpleGet)
 
         isUpdatingFromStorage = false
       }
@@ -150,12 +301,10 @@ const createStorageStore = (storageType, key, initialValue) => {
 
     storeObj._cleanup = () => {
       window.removeEventListener('storage', handleStorageChange)
-      clearTimeout(saveTimeout)
+      teardown()
     }
   } else {
-    storeObj._cleanup = () => {
-      clearTimeout(saveTimeout)
-    }
+    storeObj._cleanup = teardown
   }
 
   return storeProxy
@@ -163,35 +312,145 @@ const createStorageStore = (storageType, key, initialValue) => {
 
 const INDEX_DB_STORE_KEY = 'value'
 
-const openDB = (dbName, storeName) => {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(dbName)
+// Every store backed by the same database shares one connection, keyed by name.
+// Because `dbName` defaults to 'react-store', two `.index()` calls normally land
+// in the same database, and the second one needs a version bump to add its
+// object store — which any other open connection blocks. Holding a second
+// connection here would deadlock the library against itself, so connections are
+// shared and every open is serialized behind the last.
+const databases = new Map()
 
-    request.onupgradeneeded = event => {
-      const db = event.target.result
-      if (!db.objectStoreNames.contains(storeName)) {
-        db.createObjectStore(storeName)
+const openDatabase = (dbName, storeNames, version) =>
+  new Promise((resolve, reject) => {
+    const request =
+      version === undefined ?
+        indexedDB.open(dbName)
+      : indexedDB.open(dbName, version)
+
+    request.onupgradeneeded = () => {
+      const db = request.result
+      for (const name of storeNames) {
+        if (!db.objectStoreNames.contains(name)) {
+          db.createObjectStore(name)
+        }
       }
     }
 
     request.onerror = () => reject(request.error)
+    request.onsuccess = () => resolve(request.result)
 
-    request.onsuccess = () => {
-      const db = request.result
-      if (db.objectStoreNames.contains(storeName)) {
-        resolve(db)
-      } else {
-        const newVersion = db.version + 1
-        db.close()
-        const upgradeRequest = indexedDB.open(dbName, newVersion)
-        upgradeRequest.onupgradeneeded = event => {
-          event.target.result.createObjectStore(storeName)
-        }
-        upgradeRequest.onerror = () => reject(upgradeRequest.error)
-        upgradeRequest.onsuccess = () => resolve(upgradeRequest.result)
-      }
-    }
+    // A blocked upgrade fires neither success nor error. Without this the
+    // promise would never settle and the store would hang silently.
+    request.onblocked = () =>
+      reject(
+        new Error(
+          `Upgrading IndexedDB database "${dbName}" is blocked by another open connection to it (likely another tab).`,
+        ),
+      )
   })
+
+// Adding an object store needs a version bump, and our own connection would
+// block it, so close before reopening. Every store name this database is known
+// to need is created in the same upgrade.
+// Adopt a freshly opened connection, releasing it if another connection later
+// needs to upgrade the database. Holding it open would block that upgrade —
+// exactly the deadlock this registry exists to avoid, except across tabs, where
+// closing is the only cooperative option. The next read or write reopens.
+const adoptConnection = (entry, db) => {
+  db.onversionchange = () => {
+    db.close()
+    if (entry.db === db) entry.db = null
+  }
+  entry.db = db
+  return db
+}
+
+const upgradeForStore = (entry, dbName) => {
+  const version = entry.db.version + 1
+  entry.db.close()
+  entry.db = null
+
+  return openDatabase(dbName, entry.storeNames, version).then(db =>
+    adoptConnection(entry, db),
+  )
+}
+
+const ensureObjectStore = (dbName, storeName) => {
+  const entry = databases.get(dbName)
+  if (!entry) return Promise.resolve(null)
+
+  entry.storeNames.add(storeName)
+
+  if (entry.db) {
+    return entry.db.objectStoreNames.contains(storeName) ?
+        Promise.resolve(entry.db)
+      : upgradeForStore(entry, dbName)
+  }
+
+  return openDatabase(dbName, entry.storeNames).then(db => {
+    adoptConnection(entry, db)
+    return db.objectStoreNames.contains(storeName) ?
+        db
+      : upgradeForStore(entry, dbName)
+  })
+}
+
+// Queue work behind any in-flight open or upgrade for this database, so a write
+// can never land on a connection that is being closed mid-upgrade. The chain
+// itself always resolves to the live connection and never rejects.
+const queueOnDatabase = (dbName, work) => {
+  const entry = databases.get(dbName)
+  if (!entry) return Promise.resolve(null)
+
+  const result = entry.chain.then(() => work(entry.db))
+  entry.chain = result.then(
+    () => entry.db,
+    () => entry.db,
+  )
+  return result
+}
+
+// Run work against a live connection, reopening first if ours was closed to let
+// another tab upgrade.
+const withDatabase = (dbName, storeName, work) =>
+  queueOnDatabase(dbName, db =>
+    db ? work(db) : (
+      ensureObjectStore(dbName, storeName).then(reopened =>
+        reopened ? work(reopened) : null,
+      )
+    ),
+  )
+
+const acquireDatabase = (dbName, storeName) => {
+  let entry = databases.get(dbName)
+  if (!entry) {
+    entry = { db: null, refs: 0, storeNames: new Set(), chain: Promise.resolve() }
+    databases.set(dbName, entry)
+  }
+  entry.refs++
+
+  return queueOnDatabase(dbName, () => ensureObjectStore(dbName, storeName))
+}
+
+const releaseDatabase = dbName => {
+  const entry = databases.get(dbName)
+  if (!entry) return
+
+  entry.refs--
+  if (entry.refs > 0) return
+
+  databases.delete(dbName)
+  // Close only once queued work has drained, so a write flushed by destroy()
+  // still lands before the connection goes away.
+  entry.chain.then(
+    () => {
+      if (entry.db) {
+        entry.db.close()
+        entry.db = null
+      }
+    },
+    () => {},
+  )
 }
 
 const idbGet = (db, storeName) => {
@@ -212,66 +471,130 @@ const idbPut = (db, storeName, value) => {
   })
 }
 
-const createIndexStore = (storeName, dbName, initialValue) => {
+const createIndexStore = (storeName, dbName, initialValue, options = {}) => {
   if (typeof indexedDB === 'undefined') {
-    throw new Error(
-      "IndexedDB is not available. Make sure you're running in an environment that supports IndexedDB (e.g., browser).",
+    return createUnpersistedStore(
+      initialValue,
+      `IndexedDB is not available, so "${storeName}" will not persist. This store will keep its value in memory only.`,
     )
   }
 
-  const storeObj = { value: initialValue, listeners: new Set() }
+  // The stored value arrives asynchronously, so a server render only ever sees
+  // the initial value — pin that as the server snapshot so hydration matches.
+  const storeObj = {
+    value: initialValue,
+    listeners: new Set(),
+    serverValue: initialValue,
+    equals: resolveEquals(options.equals),
+  }
   stateMap.set(storeObj, storeObj)
   const storeProxy = createStoreProxy(storeObj)
 
-  let db = null
-  let saveTimeout
+  // See createStorageStore: each write re-serializes the whole state, so a
+  // larger interval collapses a burst of updates into a single one.
+  const saveDelay = options.debounce ?? 0
 
-  storeObj.listeners.add(() => {
-    if (!db) return
+  let saveTimeout = null
+  let destroyed = false
+  let isLoadingFromDB = false
+  // Sticky: an update made before the database finishes opening must still be
+  // persisted, and must win over whatever was already stored — it is newer.
+  let hasLocalUpdate = false
+
+  // IndexedDB has no equivalent of the `storage` event, so writes are announced
+  // on a channel keyed by database and store name. Only a ping is sent, never
+  // the value: receivers re-read, which keeps the database the single source of
+  // truth and avoids serializing the state a second time. A channel does not
+  // receive its own messages, so this also syncs two stores on the same key
+  // within one tab.
+  const channelName = `react-store:${dbName}:${storeName}`
+  const channel =
+    typeof BroadcastChannel !== 'undefined' ?
+      new BroadcastChannel(channelName)
+    : null
+
+  const applyStoredValue = existingValue => {
+    if (destroyed || existingValue === undefined) return
+    if (equalsFor(storeObj)(existingValue, storeObj.value)) return
+
+    isLoadingFromDB = true
+    storeObj.value = preserveReferences(storeObj.value, existingValue)
+    storeObj.listeners.forEach(listener => listener())
+    notifyDependentStores(storeObj, simpleGet)
+    isLoadingFromDB = false
+  }
+
+  const readFromDB = () =>
+    withDatabase(dbName, storeName, db => idbGet(db, storeName))
+
+  const saveNow = () => {
     clearTimeout(saveTimeout)
-    saveTimeout = setTimeout(() => {
-      idbPut(db, storeName, storeObj.value).catch(error => {
-        console.error(
-          `Failed to save to IndexedDB store "${storeName}":`,
-          error,
-        )
-      })
-    }, 0)
-  })
+    saveTimeout = null
+    if (destroyed) return
 
-  openDB(dbName, storeName)
-    .then(database => {
-      db = database
-      return idbGet(database, storeName)
-    })
-    .then(existingValue => {
-      if (existingValue !== undefined) {
-        if (!circularDeepEqual(existingValue, storeObj.value)) {
-          storeObj.value = preserveReferences(storeObj.value, existingValue)
-          storeObj.listeners.forEach(listener => listener())
-        }
-      } else {
-        idbPut(db, storeName, storeObj.value).catch(error => {
+    // Queued, so a write issued before the database opens is not dropped.
+    withDatabase(dbName, storeName, db =>
+      idbPut(db, storeName, storeObj.value),
+    )
+      .then(() => {
+        if (channel) channel.postMessage(1)
+      })
+      .catch(error => {
+        console.error(`Failed to save to IndexedDB store "${storeName}":`, error)
+      })
+  }
+
+  const saveListener = () => {
+    if (isLoadingFromDB) return
+
+    hasLocalUpdate = true
+    clearTimeout(saveTimeout)
+    saveTimeout = setTimeout(saveNow, saveDelay)
+  }
+  storeObj.listeners.add(saveListener)
+
+  if (channel) {
+    channel.onmessage = () => {
+      readFromDB()
+        .then(applyStoredValue)
+        .catch(error => {
           console.error(
-            `Failed to save initial value to IndexedDB store "${storeName}":`,
+            `Failed to sync IndexedDB store "${storeName}":`,
             error,
           )
         })
+    }
+  }
+
+  acquireDatabase(dbName, storeName).catch(error => {
+    console.error(`Failed to initialize IndexedDB store "${storeName}":`, error)
+  })
+
+  readFromDB()
+    .then(existingValue => {
+      if (destroyed) return
+
+      if (hasLocalUpdate || existingValue === undefined) {
+        // Either the store was updated while we were opening, or nothing is
+        // stored yet. Either way, persist what we currently hold.
+        saveNow()
+      } else {
+        applyStoredValue(existingValue)
       }
     })
     .catch(error => {
-      console.error(
-        `Failed to initialize IndexedDB store "${storeName}":`,
-        error,
-      )
+      console.error(`Failed to load IndexedDB store "${storeName}":`, error)
     })
 
   storeObj._cleanup = () => {
-    clearTimeout(saveTimeout)
-    if (db) {
-      db.close()
-      db = null
-    }
+    // Flush the debounced write before releasing, so `set()` immediately
+    // followed by `destroy()` still persists, then stop listening so a
+    // destroyed store no longer writes.
+    if (saveTimeout !== null) saveNow()
+    destroyed = true
+    storeObj.listeners.delete(saveListener)
+    if (channel) channel.close()
+    releaseDatabase(dbName)
   }
 
   return storeProxy
@@ -295,10 +618,27 @@ const getValueAtPath = (obj, path) => {
   return path.reduce((current, key) => current?.[key], obj)
 }
 
-const setValueAtPath = (obj, path, value) => {
-  if (!obj || typeof obj !== 'object') return value
+// `get`/`simpleGet` always hand back the root store's value, so a proxy for a
+// nested path has to walk down to the value it actually points at.
+const valueAtPath = (rootValue, path) =>
+  path.length > 0 ? getValueAtPath(rootValue, path) : rootValue
 
-  const newObj = Array.isArray(obj) ? [...obj] : { ...obj }
+const isThenable = value =>
+  value != null &&
+  (typeof value === 'object' || typeof value === 'function') &&
+  typeof value.then === 'function'
+
+const setValueAtPath = (obj, path, value) => {
+  // When the container is missing or isn't an object, create one — an array if
+  // the key being written is a numeric index, otherwise an object. Replacing it
+  // with the leaf value instead would collapse the parent, so that
+  // `store(null).a.set(1)` yields `1` rather than `{ a: 1 }`.
+  const base =
+    obj != null && typeof obj === 'object' ? obj
+    : /^\d+$/.test(String(path[0])) ? []
+    : {}
+
+  const newObj = Array.isArray(base) ? [...base] : { ...base }
 
   if (path.length === 1) {
     newObj[path[0]] = value
@@ -306,63 +646,49 @@ const setValueAtPath = (obj, path, value) => {
   }
 
   const [key, ...remaining] = path
-  // When the intermediate value is missing, create an array if the next path
-  // segment is a numeric index, otherwise an object.
-  const existing = obj[key]
-  const child =
-    existing == null ?
-      /^\d+$/.test(String(remaining[0])) ?
-        []
-      : {}
-    : existing
-  newObj[key] = setValueAtPath(child, remaining, value)
+  newObj[key] = setValueAtPath(base[key], remaining, value)
   return newObj
 }
 
-// Preserve object references when nested values haven't changed
-// This prevents unnecessary re-renders for components listening to nested paths
-const preserveReferences = (oldValue, newValue) => {
-  // If values are equal by reference, return old value
-  if (oldValue === newValue) return oldValue
+// Only arrays and plain objects can be structurally rebuilt. Anything else with
+// a non-Object prototype (Date, Map, Set, RegExp, class instances) must be
+// treated as a leaf: recursing would compare zero enumerable keys, wrongly
+// conclude "unchanged" and hand back the stale old value, and rebuilding it
+// would drop its prototype. Reachable via IndexedDB, whose structured clone
+// preserves these types (unlike JSON).
+const isPlainContainer = value => {
+  if (Array.isArray(value)) return true
+  if (value == null || typeof value !== 'object') return false
+  const proto = Object.getPrototypeOf(value)
+  return proto === Object.prototype || proto === null
+}
 
-  // If either is null/undefined or not an object, return new value
-  if (
-    oldValue == null ||
-    newValue == null ||
-    typeof oldValue !== 'object' ||
-    typeof newValue !== 'object'
-  ) {
-    return newValue
-  }
+const preserveArray = (oldValue, newValue, seen) => {
+  const minLength = Math.min(oldValue.length, newValue.length)
+  let hasChanges = oldValue.length !== newValue.length
+  const preserved = newValue.map((item, index) => {
+    if (index < minLength) {
+      const preservedItem = preserveReferences(oldValue[index], item, seen)
+      if (preservedItem !== oldValue[index]) hasChanges = true
+      return preservedItem
+    }
+    return item
+  })
+  return hasChanges ? preserved : oldValue
+}
 
-  // If types don't match, return new value
-  if (Array.isArray(oldValue) !== Array.isArray(newValue)) {
-    return newValue
-  }
-
-  // For arrays, preserve references for unchanged items
-  if (Array.isArray(newValue)) {
-    const minLength = Math.min(oldValue.length, newValue.length)
-    let hasChanges = oldValue.length !== newValue.length
-    const preserved = newValue.map((item, index) => {
-      if (index < minLength) {
-        const preservedItem = preserveReferences(oldValue[index], item)
-        if (preservedItem !== oldValue[index]) hasChanges = true
-        return preservedItem
-      }
-      return item
-    })
-    return hasChanges ? preserved : oldValue
-  }
-
-  // For objects, preserve references for unchanged properties
+const preserveObject = (oldValue, newValue, seen) => {
   const newKeys = Object.keys(newValue)
 
   let hasChanges = false
   const preserved = {}
   for (const key of newKeys) {
     if (key in oldValue) {
-      const preservedValue = preserveReferences(oldValue[key], newValue[key])
+      const preservedValue = preserveReferences(
+        oldValue[key],
+        newValue[key],
+        seen,
+      )
       preserved[key] = preservedValue
       if (preservedValue !== oldValue[key]) hasChanges = true
     } else {
@@ -379,6 +705,59 @@ const preserveReferences = (oldValue, newValue) => {
   return hasChanges ? preserved : oldValue
 }
 
+// Preserve object references when nested values haven't changed
+// This prevents unnecessary re-renders for components listening to nested paths
+const preserveReferences = (oldValue, newValue, seen) => {
+  // If values are equal by reference, return old value
+  if (oldValue === newValue) return oldValue
+
+  // Opaque binary values are leaves: never recurse into them. A differing
+  // reference means a different blob/buffer, so adopt the new value.
+  if (isOpaqueValue(oldValue) || isOpaqueValue(newValue)) return newValue
+
+  // If either is null/undefined or not an object, return new value
+  if (
+    oldValue == null ||
+    newValue == null ||
+    typeof oldValue !== 'object' ||
+    typeof newValue !== 'object'
+  ) {
+    return newValue
+  }
+
+  // Non-plain containers are compared whole and adopted or kept as a unit.
+  if (!isPlainContainer(oldValue) || !isPlainContainer(newValue)) {
+    return valuesEqual(oldValue, newValue) ? oldValue : newValue
+  }
+
+  // If types don't match, return new value
+  if (Array.isArray(oldValue) !== Array.isArray(newValue)) {
+    return newValue
+  }
+
+  // Structured clone can round-trip circular values, so guard against
+  // recursing forever through two distinct-but-circular trees. On re-entry we
+  // adopt the new value: the data stays correct, we just skip reference
+  // preservation across the cycle.
+  const inProgress = seen || new Map()
+  let visited = inProgress.get(oldValue)
+  if (!visited) {
+    visited = new Set()
+    inProgress.set(oldValue, visited)
+  } else if (visited.has(newValue)) {
+    return newValue
+  }
+  visited.add(newValue)
+
+  try {
+    return Array.isArray(newValue) ?
+        preserveArray(oldValue, newValue, inProgress)
+      : preserveObject(oldValue, newValue, inProgress)
+  } finally {
+    visited.delete(newValue)
+  }
+}
+
 // Create setState function
 const createSetState = (state, path) => {
   return nextValueOrUpdater => {
@@ -390,7 +769,7 @@ const createSetState = (state, path) => {
         nextValueOrUpdater(currentValue)
       : nextValueOrUpdater
 
-    if (circularDeepEqual(nextValue, currentValue)) return
+    if (equalsFor(state)(nextValue, currentValue)) return
 
     if (path.length === 0) {
       state.value = nextValue
@@ -400,27 +779,32 @@ const createSetState = (state, path) => {
 
     state.listeners.forEach(listener => listener())
 
-    // Notify derived stores that depend on this store
-    if (dependencyMap.has(state)) {
-      dependencyMap.get(state).forEach(derivedStore => {
-        if (derivedStoreMap.has(derivedStore)) {
-          const derivedStoreObj = derivedStoreMap.get(derivedStore)
-
-          // Handle async derived stores differently
-          if (derivedStoreObj.isAsync) {
-            // For async derived stores, trigger the getter to check for changes
-            derivedStoreObj.getter(simpleGet)
-          } else {
-            computeDerivedValue(derivedStoreObj, simpleGet)
-          }
-        }
-      })
-    }
+    notifyDependentStores(state, simpleGet, path)
   }
 }
 
+// Build the setter used by both `.set()` and the `useStore`/`useStoreSetter`
+// hooks. Writes to a derived store are forwarded to the base store it was
+// derived from; routing them here means both paths behave identically, instead
+// of the hooks quietly overwriting the derived value until the next recompute
+// discarded it.
+const createStoreSetter = (storeObj, path) => {
+  if (!storeObj.isDerived) return createSetState(storeObj, path)
+
+  const baseStore = findBaseStore(storeObj)
+  if (!baseStore) {
+    return () => {
+      throw new Error(
+        'Cannot set value on derived store. Derived stores are read-only.',
+      )
+    }
+  }
+
+  return createSetState(getState(baseStore), path)
+}
+
 // Create derived store from getter function
-const createDerivedStore = getter => {
+const createDerivedStore = (getter, options = {}) => {
   const storeObj = {
     value: undefined,
     listeners: new Set(),
@@ -429,6 +813,7 @@ const createDerivedStore = getter => {
     dependencies: new Set(),
     lastComputedValue: undefined,
     baseStore: null, // Store reference to the base store proxy
+    equals: resolveEquals(options.equals),
   }
 
   stateMap.set(storeObj, storeObj)
@@ -440,59 +825,112 @@ const createDerivedStore = getter => {
       throw new Error('Store not found')
     }
 
+    // Record which part of the source was read, so a write elsewhere in that
+    // source can skip recomputing this store entirely.
+    const targetPath = store._path || []
     storeObj.dependencies.add(targetStoreObj)
+    trackDependencyPath(storeObj, targetStoreObj, targetPath)
+    registerDependent(targetStoreObj, storeObj)
 
-    if (!dependencyMap.has(targetStoreObj)) {
-      dependencyMap.set(targetStoreObj, new Set())
-    }
-    dependencyMap.get(targetStoreObj).add(storeObj)
-
-    return targetStoreObj.value
+    return valueAtPath(targetStoreObj.value, targetPath)
   }
 
-  const computeValue = () => {
-    try {
-      // Remove stale dependency reverse-mappings before rebuilding
-      for (const dep of storeObj.dependencies) {
-        const depSet = dependencyMap.get(dep)
-        if (depSet) {
-          depSet.delete(storeObj)
-          if (depSet.size === 0) dependencyMap.delete(dep)
-        }
-      }
-      storeObj.dependencies.clear()
-      const newValue = getter(get)
-      storeObj.lastComputedValue = newValue
-      return newValue
-    } catch (error) {
-      console.error('Error computing derived store value:', error)
-      return storeObj.lastComputedValue
+  // Dependencies are re-tracked on *every* recompute, not just the first, so a
+  // getter with conditional branches (`get(flag) ? get(a) : get(b)`) picks up
+  // stores it only starts reading later. computeDerivedValue drives this.
+  storeObj.trackedGet = get
+  storeObj.beginTracking = () => {
+    // Remove stale dependency reverse-mappings before rebuilding
+    for (const dep of storeObj.dependencies) {
+      unregisterDependent(dep, storeObj)
     }
+    storeObj.dependencies.clear()
+    storeObj.dependencyPaths?.clear()
   }
 
-  storeObj.value = computeValue()
+  storeObj.value = computeDerivedValue(storeObj, get)
 
   // Unregister this derived store from its dependencies' reverse-mappings
   // so it can be garbage collected once destroyed.
-  storeObj._cleanup = () => {
-    for (const dep of storeObj.dependencies) {
-      const depSet = dependencyMap.get(dep)
-      if (depSet) {
-        depSet.delete(storeObj)
-        if (depSet.size === 0) dependencyMap.delete(dep)
-      }
-    }
-    storeObj.dependencies.clear()
-  }
+  storeObj._cleanup = storeObj.beginTracking
 
   return createStoreProxy(storeObj)
+}
+
+// Two paths interact when one is a prefix of the other: writing `a.b` affects a
+// reader of `a`, and writing `a` affects a reader of `a.b`. Disjoint branches —
+// `a.b` against `a.c` — do not interact at all.
+const pathsIntersect = (a, b) => {
+  const shared = Math.min(a.length, b.length)
+  for (let i = 0; i < shared; i++) {
+    if (a[i] !== b[i]) return false
+  }
+  return true
+}
+
+// Record which path of a source a dependent actually read.
+const trackDependencyPath = (dependentStoreObj, sourceStoreObj, path) => {
+  let bySource = dependentStoreObj.dependencyPaths
+  if (!bySource) {
+    bySource = new Map()
+    dependentStoreObj.dependencyPaths = bySource
+  }
+
+  let paths = bySource.get(sourceStoreObj)
+  if (!paths) {
+    paths = new Map()
+    bySource.set(sourceStoreObj, paths)
+  }
+  paths.set(JSON.stringify(path), path)
+}
+
+// Whether a write at `changedPath` can affect what this dependent read. Stores
+// that track manually (async derived stores) record no paths and are always
+// considered affected.
+const dependsOnChange = (dependentStoreObj, sourceStoreObj, changedPath) => {
+  const paths = dependentStoreObj.dependencyPaths?.get(sourceStoreObj)
+  if (!paths || paths.size === 0) return true
+
+  for (const path of paths.values()) {
+    if (pathsIntersect(path, changedPath)) return true
+  }
+  return false
+}
+
+// Dependents are held weakly. Every other registry here is a WeakMap keyed by
+// the store itself, so this set is the only strong reference that would outlive
+// a derived store the application has dropped — a derived store created per
+// component instance used to survive its component, and keep recomputing on
+// every source update, for as long as its source lived. Dead entries are pruned
+// when the set is next walked.
+const supportsWeakRef = typeof WeakRef !== 'undefined'
+
+const dependentRef = storeObj => {
+  if (!storeObj._weakRef) {
+    // Cached on the store so a dependent can be looked up and removed by
+    // identity. The ref is only reachable through the store it points at, so it
+    // cannot keep that store alive.
+    storeObj._weakRef =
+      supportsWeakRef ? new WeakRef(storeObj) : { deref: () => storeObj }
+  }
+  return storeObj._weakRef
+}
+
+// Register a derived/async store as a dependent of a source store
+const registerDependent = (sourceStoreObj, dependentStoreObj) => {
+  let depSet = dependencyMap.get(sourceStoreObj)
+  if (!depSet) {
+    depSet = new Set()
+    dependencyMap.set(sourceStoreObj, depSet)
+  }
+  depSet.add(dependentRef(dependentStoreObj))
 }
 
 // Remove an async/derived store from a single source's reverse-mapping
 const unregisterDependent = (sourceStoreObj, dependentStoreObj) => {
   const depSet = dependencyMap.get(sourceStoreObj)
   if (depSet) {
-    depSet.delete(dependentStoreObj)
+    depSet.delete(dependentRef(dependentStoreObj))
     if (depSet.size === 0) dependencyMap.delete(sourceStoreObj)
   }
 }
@@ -509,7 +947,7 @@ const createAsyncDerivedStore = (target, asyncFn) => {
   asyncStoreObj.getter = get => {
     const currentInputValue = target.getter(get)
 
-    if (!circularDeepEqual(currentInputValue, asyncStoreObj.lastInputValue)) {
+    if (!equalsFor(asyncStoreObj)(currentInputValue, asyncStoreObj.lastInputValue)) {
       asyncStoreObj.lastInputValue = currentInputValue
       runAsyncOperation(currentInputValue)
     }
@@ -530,43 +968,128 @@ const createAsyncDerivedStore = (target, asyncFn) => {
   return createStoreProxy(asyncStoreObj)
 }
 
+// Build an async store driven by `derivedFn`, re-running it whenever the value
+// `proxy` points at changes. `initialPromise`, when supplied, is a run that has
+// already been started and should be adopted instead of calling derivedFn again.
+const createAsyncDeriveStore = (
+  storeObj,
+  proxy,
+  derivedFn,
+  initialPromise,
+  options = {},
+) => {
+  const asyncStoreObj = createAsyncStoreObject(derivedFn, options.equals)
+  const runAsyncOperation = createAsyncOperationRunner(asyncStoreObj, derivedFn)
+
+  stateMap.set(asyncStoreObj, asyncStoreObj)
+  derivedStoreMap.set(asyncStoreObj, asyncStoreObj)
+
+  // Override the getter to re-run async operation when dependencies change
+  asyncStoreObj.getter = get => {
+    const currentInputValue = get(proxy)
+
+    if (!equalsFor(asyncStoreObj)(currentInputValue, asyncStoreObj.lastInputValue)) {
+      asyncStoreObj.lastInputValue = currentInputValue
+      runAsyncOperation(currentInputValue)
+    }
+
+    return asyncStoreObj.value
+  }
+
+  // Set up dependency tracking
+  setupDependencyTracking(storeObj, asyncStoreObj)
+
+  asyncStoreObj._cleanup = () => unregisterDependent(storeObj, asyncStoreObj)
+
+  // Start the initial async operation
+  const initialInputValue = simpleGet(proxy)
+  asyncStoreObj.lastInputValue = initialInputValue
+  runAsyncOperation(initialInputValue, initialPromise)
+
+  return createStoreProxy(asyncStoreObj)
+}
+
 // Shared get function for store access (stateless, no allocation needed)
 const simpleGet = store => {
   const storeObj = getState(store)
-  return storeObj.value
+  return valueAtPath(storeObj.value, store._path || [])
 }
 
 // Set up dependency tracking between stores
 const setupDependencyTracking = (sourceStore, targetStore) => {
-  if (!dependencyMap.has(sourceStore)) {
-    dependencyMap.set(sourceStore, new Set())
-  }
-  dependencyMap.get(sourceStore).add(targetStore)
+  registerDependent(sourceStore, targetStore)
 }
 
 // Create an async store object with common properties
-const createAsyncStoreObject = asyncFn => ({
-  value: { loading: true },
+const createAsyncStoreObject = (asyncFn, equals) => {
+  const loadingValue = { loading: true }
+
+  return {
+  value: loadingValue,
+  // A server render can't await the promise, so it always emits the loading
+  // state. Sharing the exact object keeps the server snapshot reference-stable,
+  // which React requires, and stops serverValueOf from calling the getter —
+  // which would kick off the async operation on the server.
+  serverValue: loadingValue,
   listeners: new Set(),
   isDerived: true,
   isAsync: true,
+  equals: resolveEquals(equals),
   getter: get => ({ loading: true }),
   dependencies: new Set(),
   lastComputedValue: undefined,
   asyncFn,
   isRunning: false,
   lastInputValue: undefined,
+  // The input the most recent run actually started with. Distinct from
+  // lastInputValue, which the getter advances before the run is queued.
+  lastRunInputValue: undefined,
   pendingInputValue: undefined,
-})
+  // `undefined` is a legitimate input value, so pending-ness needs its own
+  // flag rather than sentinel-checking pendingInputValue.
+  hasPendingInput: false,
+  }
+}
+
+// The value a store has before anything a server can't do — reading storage,
+// awaiting a promise — has changed it. React calls getServerSnapshot during
+// hydration as well as on the server, so this has to match the server HTML and
+// be reference-stable across calls.
+const serverValueOf = storeObj => {
+  if ('serverValue' in storeObj) return storeObj.serverValue
+
+  // A derived store recomputes from its sources' server values. Async stores
+  // never reach here — they pin a serverValue above — so the getter is safe to
+  // call. The result is cached because React requires a consistent snapshot.
+  if (storeObj.isDerived) {
+    try {
+      storeObj.serverValue = storeObj.getter(serverGet)
+    } catch (error) {
+      console.error('Error computing derived store server value:', error)
+      storeObj.serverValue = storeObj.lastComputedValue
+    }
+    return storeObj.serverValue
+  }
+
+  // A plain store holds the same value on both sides, having no browser-only
+  // source to diverge from.
+  return storeObj.value
+}
+
+const serverGet = store =>
+  valueAtPath(serverValueOf(getState(store)), store._path || [])
 
 // Create async operation runner
 const createAsyncOperationRunner = (asyncStoreObj, derivedFn) => {
-  const run = inputValue => {
+  const run = (inputValue, existingPromise) => {
+    asyncStoreObj.lastRunInputValue = inputValue
     asyncStoreObj.isRunning = true
     asyncStoreObj.value = { loading: true }
     asyncStoreObj.listeners.forEach(listener => listener())
 
-    derivedFn(inputValue)
+    // An adopted promise is a run derivedFn already started; calling it again
+    // would duplicate the work, including any request it makes.
+    Promise.resolve(existingPromise || derivedFn(inputValue))
       .then(result => {
         asyncStoreObj.value = result
         asyncStoreObj.lastComputedValue = result
@@ -590,49 +1113,84 @@ const createAsyncOperationRunner = (asyncStoreObj, derivedFn) => {
   }
 
   const flushPending = () => {
-    if (asyncStoreObj.pendingInputValue !== undefined) {
-      const pending = asyncStoreObj.pendingInputValue
-      asyncStoreObj.pendingInputValue = undefined
-      if (!circularDeepEqual(pending, asyncStoreObj.lastInputValue)) {
-        asyncStoreObj.lastInputValue = pending
-        run(pending)
-      }
+    if (!asyncStoreObj.hasPendingInput) return
+
+    const pending = asyncStoreObj.pendingInputValue
+    asyncStoreObj.hasPendingInput = false
+    asyncStoreObj.pendingInputValue = undefined
+
+    // Compare against the input the finished run used, not lastInputValue —
+    // the getter already advanced that to `pending` before queueing it, so
+    // comparing against it would always match and drop the update.
+    if (!equalsFor(asyncStoreObj)(pending, asyncStoreObj.lastRunInputValue)) {
+      asyncStoreObj.lastInputValue = pending
+      run(pending)
     }
   }
 
-  return inputValue => {
+  return (inputValue, existingPromise) => {
     if (asyncStoreObj.isRunning) {
       asyncStoreObj.pendingInputValue = inputValue
+      asyncStoreObj.hasPendingInput = true
       return
     }
-    run(inputValue)
+    run(inputValue, existingPromise)
   }
 }
 
 // Notify dependent derived stores of a store update
-function notifyDependentStores(storeObj, get) {
-  if (dependencyMap.has(storeObj)) {
-    dependencyMap.get(storeObj).forEach(dependentStore => {
-      if (derivedStoreMap.has(dependentStore)) {
-        const dependentStoreObj = derivedStoreMap.get(dependentStore)
-        if (dependentStoreObj.isAsync) {
-          // Re-run the async getter; it no-ops unless its input changed,
-          // so this is safe against cycles and propagates async-of-async chains.
-          dependentStoreObj.getter(simpleGet)
-        } else {
-          computeDerivedValue(dependentStoreObj, get)
-        }
-      }
-    })
+function notifyDependentStores(storeObj, get, changedPath = []) {
+  const dependents = dependencyMap.get(storeObj)
+  if (!dependents) return
+
+  // Iterate a snapshot: recomputing a dependent re-registers its dependencies,
+  // which mutates this very Set. A value deleted and re-added mid-iteration is
+  // revisited by the live Set, which would loop forever.
+  for (const ref of [...dependents]) {
+    const dependentStore = ref.deref()
+
+    // Collected since the last walk — drop the tombstone.
+    if (!dependentStore) {
+      dependents.delete(ref)
+      continue
+    }
+
+    if (!derivedStoreMap.has(dependentStore)) continue
+
+    const dependentStoreObj = derivedStoreMap.get(dependentStore)
+
+    // Skip a dependent that only read a branch this write did not touch.
+    if (!dependsOnChange(dependentStoreObj, storeObj, changedPath)) continue
+
+    if (dependentStoreObj.isAsync) {
+      // Re-run the async getter; it no-ops unless its input changed,
+      // so this is safe against cycles and propagates async-of-async chains.
+      dependentStoreObj.getter(simpleGet)
+    } else {
+      computeDerivedValue(dependentStoreObj, get)
+    }
+  }
+
+  // Every dependent was collected; drop the empty set too. Recomputing a
+  // dependent re-registers it, which can replace this set with a fresh one, so
+  // only delete the entry if it is still the very set that was walked.
+  if (dependents.size === 0 && dependencyMap.get(storeObj) === dependents) {
+    dependencyMap.delete(storeObj)
   }
 }
 
 // Compute derived store value and handle dependency updates
 function computeDerivedValue(derivedStoreObj, get) {
   try {
-    const newValue = derivedStoreObj.getter(get)
+    // Re-register dependencies on each recompute so conditional dependencies
+    // stay accurate. Async derived stores track manually and have no
+    // trackedGet, so they keep using the caller's get.
+    const trackedGet = derivedStoreObj.trackedGet
+    if (trackedGet) derivedStoreObj.beginTracking()
 
-    if (!circularDeepEqual(newValue, derivedStoreObj.lastComputedValue)) {
+    const newValue = derivedStoreObj.getter(trackedGet || get)
+
+    if (!equalsFor(derivedStoreObj)(newValue, derivedStoreObj.lastComputedValue)) {
       derivedStoreObj.value = newValue
       derivedStoreObj.lastComputedValue = newValue
 
@@ -652,7 +1210,10 @@ function computeDerivedValue(derivedStoreObj, get) {
 const MAX_PROXY_CACHE_SIZE = 500
 
 function createStoreProxy(storeObj, path = []) {
-  const pathKey = path.join('.')
+  // Joining on '.' is ambiguous: `store['a.b']` and `store.a.b` produce the same
+  // key, so one silently returns the other's proxy. JSON quotes and escapes each
+  // segment, which keeps distinct paths distinct.
+  const pathKey = JSON.stringify(path)
 
   let pathCache = proxyCache.get(storeObj)
   if (!pathCache) {
@@ -707,113 +1268,78 @@ function createStoreProxy(storeObj, path = []) {
       }
 
       if (prop === 'set') {
-        return data => {
-          if (target.isDerived) {
-            // For derived stores, we need to find the base store and update it
-            // We need to update the base store that this derived store depends on
-            const baseStore = findBaseStore(target)
-            if (baseStore) {
-              const baseState = getState(baseStore)
-              const setStateFn = createSetState(baseState, path)
-              setStateFn(data)
-            } else {
-              throw new Error(
-                'Cannot set value on derived store. Derived stores are read-only.',
-              )
-            }
-          } else {
-            const state = getState(storeObj)
-            const setStateFn = createSetState(state, path)
-            setStateFn(data)
-          }
-        }
+        return createStoreSetter(target, path)
       }
 
       if (prop === 'local') {
-        return key => {
-          const currentValue =
-            path.length > 0 ?
-              getValueAtPath(storeObj.value, path)
-            : storeObj.value
-          return createStorageStore('local', key, currentValue)
-        }
+        return (key, options) =>
+          createStorageStore(
+            'local',
+            key,
+            valueAtPath(storeObj.value, path),
+            options,
+          )
       }
 
       if (prop === 'session') {
-        return key => {
-          const currentValue =
-            path.length > 0 ?
-              getValueAtPath(storeObj.value, path)
-            : storeObj.value
-          return createStorageStore('session', key, currentValue)
-        }
+        return (key, options) =>
+          createStorageStore(
+            'session',
+            key,
+            valueAtPath(storeObj.value, path),
+            options,
+          )
       }
 
       if (prop === 'index') {
-        return (storeName, dbName = 'react-store') => {
-          const currentValue =
-            path.length > 0 ?
-              getValueAtPath(storeObj.value, path)
-            : storeObj.value
-          return createIndexStore(storeName, dbName, currentValue)
-        }
+        return (storeName, dbName = 'react-store', options) =>
+          createIndexStore(
+            storeName,
+            dbName,
+            valueAtPath(storeObj.value, path),
+            options,
+          )
       }
 
       if (prop === 'derive') {
-        return derivedFn => {
-          const isAsync = derivedFn.constructor?.name === 'AsyncFunction'
-
-          if (isAsync) {
-            const asyncStoreObj = createAsyncStoreObject(derivedFn)
-            const runAsyncOperation = createAsyncOperationRunner(
-              asyncStoreObj,
+        return (derivedFn, options) => {
+          if (derivedFn.constructor?.name === 'AsyncFunction') {
+            return createAsyncDeriveStore(
+              storeObj,
+              proxy,
               derivedFn,
+              undefined,
+              options,
             )
-
-            stateMap.set(asyncStoreObj, asyncStoreObj)
-            derivedStoreMap.set(asyncStoreObj, asyncStoreObj)
-
-            // Override the getter to re-run async operation when dependencies change
-            asyncStoreObj.getter = get => {
-              const currentInputValue = get(proxy)
-
-              if (
-                !circularDeepEqual(
-                  currentInputValue,
-                  asyncStoreObj.lastInputValue,
-                )
-              ) {
-                asyncStoreObj.lastInputValue = currentInputValue
-                runAsyncOperation(currentInputValue)
-              }
-
-              return asyncStoreObj.value
-            }
-
-            // Set up dependency tracking
-            setupDependencyTracking(storeObj, asyncStoreObj)
-
-            asyncStoreObj._cleanup = () =>
-              unregisterDependent(storeObj, asyncStoreObj)
-
-            // Start the initial async operation
-            const initialInputValue = getState(proxy).value
-            asyncStoreObj.lastInputValue = initialInputValue
-            runAsyncOperation(initialInputValue)
-
-            return createStoreProxy(asyncStoreObj)
           }
 
           // Create a regular derived store that depends on this store
-          const derivedStore = store(get => {
-            const currentValue = get(proxy)
-            return derivedFn(currentValue)
-          })
+          const derivedStore = store(
+            get => derivedFn(get(proxy)),
+            options,
+          )
 
           // Set up dependency tracking
           const derivedStoreObj = getState(derivedStore)
           derivedStoreObj.baseStore = proxy
           setupDependencyTracking(storeObj, derivedStoreObj)
+
+          // A plain function returning a promise is async in every way that
+          // matters here, and a transpiled async function loses the
+          // AsyncFunction constructor name, so the check above can't be trusted
+          // on its own. The initial compute already produced the promise —
+          // adopt it rather than invoking derivedFn a second time.
+          if (isThenable(derivedStoreObj.value)) {
+            const initialPromise = derivedStoreObj.value
+            derivedStore.destroy()
+            return createAsyncDeriveStore(
+              storeObj,
+              proxy,
+              derivedFn,
+              initialPromise,
+              options,
+            )
+          }
 
           return derivedStore
         }
@@ -888,20 +1414,32 @@ const useSubscribe = store => {
   )
 }
 
-const useSetState = (state, path) => {
-  return useMemo(() => createSetState(state, path), [state, path])
+const useSetState = (storeObj, path) => {
+  return useMemo(() => createStoreSetter(storeObj, path), [storeObj, path])
+}
+
+// Snapshot readers shared by the value hooks. Without a server snapshot,
+// useSyncExternalStore throws outright during server rendering.
+const useSnapshots = store => {
+  const getSnapshot = useCallback(() => {
+    const state = getState(store)
+    return valueAtPath(state.value, store._path || [])
+  }, [store])
+
+  const getServerSnapshot = useCallback(() => {
+    const state = getState(store)
+    return valueAtPath(serverValueOf(state), store._path || [])
+  }, [store])
+
+  return [getSnapshot, getServerSnapshot]
 }
 
 // Main React hook for using stores
 export const useStore = store => {
   const subscribe = useSubscribe(store)
-  const getSnapshot = useCallback(() => {
-    const state = getState(store)
-    const path = store._path || []
-    return path.length > 0 ? getValueAtPath(state.value, path) : state.value
-  }, [store])
+  const [getSnapshot, getServerSnapshot] = useSnapshots(store)
 
-  const value = useSyncExternalStore(subscribe, getSnapshot)
+  const value = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)
   const setValue = useSetState(getState(store), store._path || [])
 
   return [value, setValue]
@@ -910,13 +1448,9 @@ export const useStore = store => {
 // Individual hooks for getting just the value or setter
 export const useStoreValue = store => {
   const subscribe = useSubscribe(store)
-  const getSnapshot = useCallback(() => {
-    const state = getState(store)
-    const path = store._path || []
-    return path.length > 0 ? getValueAtPath(state.value, path) : state.value
-  }, [store])
+  const [getSnapshot, getServerSnapshot] = useSnapshots(store)
 
-  return useSyncExternalStore(subscribe, getSnapshot)
+  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)
 }
 
 export const useStoreSetter = store => {

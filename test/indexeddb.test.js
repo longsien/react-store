@@ -118,6 +118,46 @@ describe('IndexedDB Persistence', () => {
     s3.destroy()
   })
 
+  it('should persist and reload an opaque binary value', async () => {
+    // Typed arrays round-trip through structured clone natively (Blobs do too
+    // in a real browser, but happy-dom's polyfilled Blob is not cloneable).
+    const bytes = new Uint8Array([1, 2, 3, 250])
+    const s = store({ data: null }).index('idb-binary')
+    await waitForIDB()
+
+    s.set({ data: bytes })
+    await waitForIDB()
+
+    s.destroy()
+    const verify = store({ data: null }).index('idb-binary')
+    await waitForIDB()
+
+    const loaded = verify.get().data
+    expect(loaded).toBeInstanceOf(Uint8Array)
+    expect(Array.from(loaded)).toEqual([1, 2, 3, 250])
+    verify.destroy()
+  })
+
+  it('should treat a different Blob as a change even with identical bytes', async () => {
+    const s = store({ file: new Blob(['same']) }).index('idb-blob-change')
+    await waitForIDB()
+
+    let notified = 0
+    s._obj.listeners.add(() => notified++)
+
+    // A distinct Blob with identical content must register as a change,
+    // since opaque values are compared by reference identity.
+    s.set({ file: new Blob(['same']) })
+    expect(notified).toBe(1)
+
+    // Setting the same reference must be a no-op.
+    const current = s.get().file
+    s.set({ file: current })
+    expect(notified).toBe(1)
+
+    s.destroy()
+  })
+
   it('should clean up on destroy', async () => {
     const s = store({ temp: true }).index('idb-destroy')
     await waitForIDB()

@@ -1,17 +1,19 @@
 {
   "name": "@longsien/react-store",
-  "version": "1.3.2",
+  "version": "1.4.2",
   "workspaces": [
     "examples/demo"
   ],
   "main": "dist/index.js",
   "module": "dist/index.js",
+  "types": "./dist/index.d.ts",
   "scripts": {
     "build:dev": "rm -rf dist && babel src -d dist --copy-files",
     "build:min": "BABEL_ENV=minify babel src -d dist --copy-files --out-file-extension .min.js",
     "build": "npm run build:dev && npm run build:min",
     "prepare": "npm run build",
     "test": "vitest",
+    "test:gc": "NODE_OPTIONS=--expose-gc vitest run",
     "demo": "vite examples/demo"
   },
   "author": "Long Sien",
@@ -29,6 +31,9 @@
     "LICENSE",
     "README.md"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "peerDependencies": {
     "react": ">=18.0.0"
   },

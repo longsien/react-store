@@ -9,7 +9,8 @@ A lightweight, proxy-based global state management library for React.
 - **Dynamic Scoping**: Components automatically subscribe only to the specific array indices or object properties they access, so unrelated updates never re-render them
 - **Derived stores**: Compute values from one or more stores; subscribers only re-render when the derived value actually changes
 - **Async stores**: First-class loading / error / success handling for data fetching, including async derived stores that re-run when their inputs change
-- **Persistence**: Back any store with `localStorage`, `sessionStorage`, or IndexedDB, with automatic JSON serialization and cross-tab synchronization for `localStorage`
+- **Persistence**: Back any store with `localStorage`, `sessionStorage`, or IndexedDB, with automatic serialization and cross-tab synchronization for both `localStorage` and IndexedDB
+- **Server-rendering ready**: Works with Next.js, Remix and any other SSR setup, with hydration-safe snapshots for persisted stores — see [Server-Side Rendering](#server-side-rendering)
 - **No provider, no boilerplate**: Stores are plain module-level values usable from any component or from outside React entirely
 
 ## Live Demo
@@ -133,6 +134,10 @@ const tempStore = store({ items: [] }).session('temp-data')
 
 Creates a store backed by IndexedDB. The initial value is used synchronously until the asynchronous read completes, after which the persisted value (if any) is loaded in. `dbName` defaults to `'react-store'`.
 
+IndexedDB stores also **synchronize across tabs**, via `BroadcastChannel` where available. Every store sharing a `dbName` shares a single connection, so any number of them can live in one database. If another tab needs to upgrade that database, this one releases its connection so the upgrade isn't blocked, and reopens on the next read or write.
+
+Unlike `.local()` and `.session()`, values are stored via structured clone rather than JSON, so `Date`, `Map`, `Set` and binary values (`Blob`, `File`, `ArrayBuffer`, typed arrays) round-trip intact.
+
 ```jsx
 // Store with IndexedDB persistence
 const docsStore = store({ drafts: [] }).index('documents')
@@ -201,13 +206,18 @@ userStore.origin.set('China')
 
 #### `store.destroy()`
 
-Cleans up resources held by a store — removes the cross-tab `storage` listener for `localStorage` stores, closes the IndexedDB connection, clears pending save timers, and unregisters derived stores from their dependencies. Call it when a dynamically created store is no longer needed. Module-level stores that live for the lifetime of the app generally don't need this.
+Cleans up resources held by a store. Any debounced write still pending is **flushed first**, so a `set()` immediately followed by `destroy()` is never lost. It then stops persisting, removes the cross-tab `storage` listener for `localStorage` stores, releases the IndexedDB connection, and unregisters derived stores from their dependencies.
 
 ```jsx
 const settingsStore = store({ theme: 'dark' }).local('app-settings')
-// Later, when no longer needed:
+settingsStore.set({ theme: 'light' })
+// The pending write is flushed, then the store stops persisting:
 settingsStore.destroy()
 ```
+
+Call it when a persisted store is no longer needed, so it releases its storage listener or database connection promptly. Module-level stores that live for the lifetime of the app don't need it.
+
+Derived stores don't require `destroy()` to avoid leaking. A source store holds its dependents weakly, so a derived store that the application has dropped — one created inside a component that has since unmounted, say — becomes eligible for garbage collection and stops recomputing on its own. Calling `destroy()` on it simply makes that immediate and deterministic.
 
 ## Derived Stores
 
@@ -513,6 +523,123 @@ import { useStore, useStoreSetter } from '@longsien/react-store'
 const [user, setUser] = useStore(usersStore[userId])
 const setStatus = useStoreSetter(usersStore[userId].status)
 ```
+
+### Reading Part of a Store
+
+`get()` returns the value at whatever path you hand it, and the derived store depends on **only that path**. A write elsewhere in the same source doesn't recompute it:
+
+```jsx
+const appStore = store({ items: [1, 2], meta: { hits: 0 } })
+
+const itemCount = store(get => get(appStore.items).length)
+
+appStore.meta.hits.set(1) // itemCount does not recompute
+appStore.items.set([1, 2, 3]) // itemCount recomputes
+```
+
+Paths interact when one contains the other, so correctness never depends on reading at exactly the right depth. Writing `appStore` as a whole reaches a store that read `appStore.items`, and writing `appStore.items[0]` reaches one that read `appStore.items`. Only genuinely disjoint branches — `items` against `meta` — are treated as independent.
+
+This makes narrow reads worth preferring in a large store: `get(appStore.items)` says exactly what the derived store cares about, and everything else stops waking it up.
+
+## Performance Tuning
+
+The defaults suit most applications. These two options matter once a store holds a large amount of data.
+
+### Equality
+
+Every write is compared against the current value, and subscribers are notified only if it actually changed. The default comparison is **deep**, which is what stops a re-render when an immutable update produces a new object holding identical data. That comparison costs O(size) per write, so for a large state replaced wholesale it can dominate:
+
+```jsx
+// 20,000 items, replaced 20 times
+store(bigState)                             // ~160ms
+store(bigState, { equals: 'shallow' })      //  ~0.1ms
+store(bigState, { equals: 'reference' })    //  ~0.0ms
+```
+
+| Option | Comparison | Use when |
+| --- | --- | --- |
+| `'deep'` *(default)* | Full structural | Values are rebuilt from equal data and you want to suppress those updates |
+| `'shallow'` | Same keys, values by identity | Immutable updates — unchanged branches keep their references anyway |
+| `'reference'` | `Object.is` | You always create a new object when something genuinely changed |
+| function | Yours | A version field or id is enough to decide |
+
+```jsx
+// Shallow is usually the right upgrade for immutably-updated state
+const boardStore = store(largeBoard, { equals: 'shallow' })
+
+// Or compare on whatever actually identifies a change
+const docStore = store(document, { equals: (a, b) => a.revision === b.revision })
+```
+
+The option applies to nested writes as well, and `.derive()` accepts it for the comparison of its computed result:
+
+```jsx
+const summaryStore = itemsStore.derive(computeSummary, { equals: 'shallow' })
+```
+
+### Persistence debounce
+
+Persisted stores debounce their writes. The default of `0` coalesces every change within a tick, but changes spread across ticks — dragging, typing, animating — each trigger a write, and every write re-serializes the entire state:
+
+```jsx
+// 20 updates spread over ~100ms, 20,000 items
+store(bigState).local('board')                     // 21 writes
+store(bigState).local('board', { debounce: 100 })  //  2 writes
+```
+
+```jsx
+const boardStore = store(largeBoard).local('board', {
+  debounce: 250,
+  equals: 'shallow',
+})
+```
+
+Raising `debounce` never risks losing data: `destroy()` flushes a pending write rather than dropping it. It does mean a hard tab close within the interval can lose the most recent change, so keep the interval short for data you cannot afford to lose. `.session()` and `.index()` take the same option.
+
+## Server-Side Rendering
+
+Stores work on the server with no configuration. `useStore` and `useStoreValue` supply the server snapshot that React's `useSyncExternalStore` requires, so components render on the server and hydrate on the client without special-casing.
+
+### Persisted stores render their initial value
+
+A server has no `localStorage` and no IndexedDB, so it cannot know what a returning visitor has stored. A persisted store therefore renders its **initial value** on the server, and React swaps in the stored value on the first client render after hydration:
+
+```jsx
+// localStorage holds { count: 42 } from a previous visit
+const counter = store({ count: 0 }).local('counter')
+
+const Counter = () => {
+  const [{ count }] = useStore(counter)
+  return <span>{count}</span>
+}
+
+// Server renders:      <span>0</span>   ← the initial value
+// After hydration:     <span>42</span>  ← the stored value
+```
+
+This is deliberate. Rendering the stored value during hydration would not match the server's HTML, and React would report a hydration mismatch. Outside of rendering, `counter.get()` returns the stored value immediately as always — only the hydration snapshot is pinned.
+
+If the brief flash of the initial value matters, gate the persisted part of your UI on having mounted:
+
+```jsx
+const Counter = () => {
+  const [{ count }] = useStore(counter)
+  const [hydrated, setHydrated] = useState(false)
+  useEffect(() => setHydrated(true), [])
+
+  return <span>{hydrated ? count : '—'}</span>
+}
+```
+
+Derived stores follow the same rule: a store derived from a persisted store computes its server value from its source's server value, so the whole chain stays consistent. Async stores render their loading state on the server, since a server render cannot await the promise — use `isLoading` to render a skeleton.
+
+### Missing storage degrades instead of throwing
+
+`.local()`, `.session()` and `.index()` fall back to an ordinary in-memory store when their backend is unavailable, so the same module-level store definition can be imported on the server. In a browser — where a missing backend is a real problem, such as blocked storage or private mode — a warning is logged. Nothing is logged on a server, where the fallback is expected.
+
+### Stores are per-process, not per-request
+
+Module-level stores are shared by every request the server handles, exactly as any module-level value is. Never put request-specific or user-specific data in a module-level store on the server — it will leak between requests. Keep server-rendered stores to genuinely global, non-sensitive state, and pass per-request data through props or your framework's own loader/context mechanism.
 
 ## Requirements
 

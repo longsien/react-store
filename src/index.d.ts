@@ -6,6 +6,40 @@
 import { Dispatch, SetStateAction } from 'react'
 
 /**
+ * How a store decides whether a new value differs from the current one, which
+ * determines whether subscribers are notified.
+ *
+ * - `deep` (default) — full structural comparison. Prevents re-renders when a
+ *   freshly built object holds identical data, at O(size) cost per write.
+ * - `shallow` — same keys, each value compared by identity. Much cheaper for
+ *   large states built with immutable updates.
+ * - `reference` — `Object.is` only. Cheapest; every new object is a change.
+ */
+export type EqualityPreset = 'deep' | 'shallow' | 'reference'
+
+/**
+ * A custom comparison. Return true when the two values should be treated as
+ * equal, meaning no update is published.
+ */
+export type EqualityComparator<T> = (a: T, b: T) => boolean
+
+export interface StoreOptions<T> {
+  /** Comparison used to decide whether a write is a change. Defaults to `deep`. */
+  equals?: EqualityPreset | EqualityComparator<T>
+}
+
+export interface PersistOptions<T> extends StoreOptions<T> {
+  /**
+   * Milliseconds to wait after the last change before writing. Defaults to 0,
+   * which coalesces every change within a tick. A larger interval coalesces
+   * bursts such as dragging or typing into a single write — worthwhile because
+   * each write re-serializes the entire state. A pending write is always
+   * flushed by `destroy()`, so raising this never risks losing data.
+   */
+  debounce?: number
+}
+
+/**
  * A function that updates state, similar to React's setState.
  * Can accept either a new value or an updater function.
  *
@@ -72,7 +106,7 @@ export interface Store<T> {
    * const userThemeStore = store({ user: { theme: 'light' } }).user.theme.local('user-theme')
    * ```
    */
-  local(key: string): Store<T>
+  local(key: string, options?: PersistOptions<T>): Store<T>
 
   /**
    * Create a sessionStorage-backed version of this store.
@@ -87,13 +121,14 @@ export interface Store<T> {
    * const userTempStore = store({ user: { temp: 'data' } }).user.temp.session('user-temp')
    * ```
    */
-  session(key: string): Store<T>
+  session(key: string, options?: PersistOptions<T>): Store<T>
 
   /**
    * Create an IndexedDB-backed version of this store.
    * Data is automatically persisted and restored across browser sessions.
-   * Supports cross-tab synchronization via BroadcastChannel.
    * Initial value is used until the async IndexedDB read completes.
+   * Stores sharing a database name share a single connection.
+   * Changes are synchronised across tabs via BroadcastChannel where available.
    *
    * @param storeName The IndexedDB object store name
    * @param dbName Optional database name (defaults to 'react-store')
@@ -104,7 +139,11 @@ export interface Store<T> {
    * const userStore = store({ name: 'John' }).index('users', 'my-app')
    * ```
    */
-  index(storeName: string, dbName?: string): Store<T>
+  index(
+    storeName: string,
+    dbName?: string,
+    options?: PersistOptions<T>,
+  ): Store<T>
 
   /**
    * Create a derived store that depends on this store's value.
@@ -122,7 +161,10 @@ export interface Store<T> {
    * })
    * ```
    */
-  derive<U>(derivedFn: (value: T) => U | Promise<U>): Store<U>
+  derive<U>(
+    derivedFn: (value: T) => U | Promise<U>,
+    options?: StoreOptions<U>,
+  ): Store<U>
 
   /**
    * Load data asynchronously into this store.
@@ -149,8 +191,10 @@ export interface Store<T> {
 
   /**
    * Clean up resources associated with this store.
-   * Removes event listeners (e.g., storage cross-tab sync) and clears pending timers.
-   * Call this when the store is no longer needed to prevent memory leaks.
+   * Flushes any pending debounced write first, then stops persisting, removes
+   * event listeners (e.g. storage cross-tab sync) and releases the IndexedDB
+   * connection. Derived stores do not require this to avoid leaking — they are
+   * held weakly — but it makes their cleanup immediate.
    *
    * @example
    * ```ts
@@ -194,7 +238,10 @@ export type StoreProxy<T> = Store<T> & {
  * const todosStore = store([{ id: 1, text: 'Learn React' }])
  * ```
  */
-export function store<T>(initialValue: T): StoreProxy<T>
+export function store<T>(
+  initialValue: T,
+  options?: StoreOptions<T>,
+): StoreProxy<T>
 
 /**
  * React hook that provides both the current value and a setter function.
