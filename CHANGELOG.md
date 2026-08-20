@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Optional deferred hydration for `.local()` and `.session()` via `{ defer: true }`. The store stays on its initial value and does not read or write storage until `rehydrate()`.
+- `store.rehydrate({ key }?)` to bind or retarget a storage-backed store. A missing key loads the original initial value rather than copying in-memory state onto the new key. Default `.local(key)` / `.session(key)` behaviour is unchanged.
+
 ## [1.4.2] - 2026-08-20
 
 ### Added

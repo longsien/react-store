@@ -121,6 +121,16 @@ localStorage-backed stores also **synchronize across tabs**: when another tab wr
 const settingsStore = store({ theme: 'dark' }).local('settings')
 ```
 
+Pass `{ defer: true }` to skip the initial read/write. The store stays at its initial value in memory until you call `rehydrate()` — useful when the storage key is not known yet, or persistence should wait for a later signal:
+
+```jsx
+const settingsStore = store({ theme: 'dark' }).local('settings', { defer: true })
+settingsStore.rehydrate()
+settingsStore.rehydrate({ key: 'settings.v2' })
+```
+
+`.session()` accepts the same `defer` option and `rehydrate()` method.
+
 #### `store(initialValue).session(key)`
 
 Creates a store backed by sessionStorage with automatic persistence. Data is automatically serialized to JSON when saving and deserialized when loading.
@@ -218,6 +228,21 @@ settingsStore.destroy()
 Call it when a persisted store is no longer needed, so it releases its storage listener or database connection promptly. Module-level stores that live for the lifetime of the app don't need it.
 
 Derived stores don't require `destroy()` to avoid leaking. A source store holds its dependents weakly, so a derived store that the application has dropped — one created inside a component that has since unmounted, say — becomes eligible for garbage collection and stops recomputing on its own. Calling `destroy()` on it simply makes that immediate and deterministic.
+
+#### `store.rehydrate({ key }?)`
+
+Binds (or rebinds) a `.local()` / `.session()` store to a storage key. The in-memory value is replaced with whatever is stored at that key. If the key is missing, the store resets to its **original initial value** and that value is written to the key — it does not copy whatever currently sits in memory onto the new key.
+
+`rehydrate()` with no argument uses the key passed to `.local()` / `.session()`, or the key from the last `rehydrate({ key })`.
+
+```jsx
+const settings = store({ theme: 'dark' }).local('settings', { defer: true })
+// Nothing is read or written yet
+settings.rehydrate() // bind 'settings'
+settings.rehydrate({ key: 'settings.v2' }) // load v2 (or initial value if empty)
+```
+
+Calling `rehydrate()` on an in-memory store logs an error and does nothing. After `destroy()`, `rehydrate()` can bind again.
 
 ## Derived Stores
 
@@ -595,6 +620,10 @@ const boardStore = store(largeBoard).local('board', {
 ```
 
 Raising `debounce` never risks losing data: `destroy()` flushes a pending write rather than dropping it. It does mean a hard tab close within the interval can lose the most recent change, so keep the interval short for data you cannot afford to lose. `.session()` and `.index()` take the same option.
+
+### Deferred persistence
+
+`.local(key, { defer: true })` and `.session(key, { defer: true })` create the store without touching storage. `set()` updates memory only. `rehydrate()` (or `rehydrate({ key })`) is the first read/write, and can later point the same store at a different key. A pending write to the previous key is flushed first, matching `destroy()`.
 
 ## Server-Side Rendering
 

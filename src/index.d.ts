@@ -37,6 +37,19 @@ export interface PersistOptions<T> extends StoreOptions<T> {
    * flushed by `destroy()`, so raising this never risks losing data.
    */
   debounce?: number
+  /**
+   * If true, keep `initialValue` in memory and do not read or write storage
+   * until `rehydrate()` runs. Defaults to false.
+   */
+  defer?: boolean
+}
+
+export interface RehydrateOptions {
+  /**
+   * Storage key to bind. Defaults to the key passed to `.local()` / `.session()`,
+   * or the key from the last `rehydrate({ key })`.
+   */
+  key?: string
 }
 
 /**
@@ -204,6 +217,22 @@ export interface Store<T> {
    * ```
    */
   destroy(): void
+
+  /**
+   * Bind or retarget persistence for a `.local()` / `.session()` store.
+   * Reads the given key (or the current one), replacing in-memory state with
+   * the stored value — or the original initial value if the key is missing —
+   * then persists subsequent writes there. Does nothing useful on in-memory
+   * stores; those log an error.
+   *
+   * @example
+   * ```ts
+   * const settings = store(defaults).local('settings', { defer: true })
+   * settings.rehydrate()
+   * settings.rehydrate({ key: 'settings.v2' })
+   * ```
+   */
+  rehydrate(options?: RehydrateOptions): void
 }
 
 /**
