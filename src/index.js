@@ -144,22 +144,7 @@ const createUnpersistedStore = (initialValue, reason) => {
   return createStoreProxy(storeObj)
 }
 
-// Create storage-backed stores (localStorage/sessionStorage)
-const createStorageStore = (storageType, key, initialValue, options = {}) => {
-  const storage = getStorage(storageType)
-
-  // Ensure storage APIs are available
-  if (
-    !storage ||
-    typeof storage.getItem !== 'function' ||
-    typeof storage.setItem !== 'function'
-  ) {
-    return createUnpersistedStore(
-      initialValue,
-      `${storageType}Storage is not available, so "${key}" will not persist. This store will keep its value in memory only.`,
-    )
-  }
-
+const readStoredValue = (storage, key, fallback) => {
   // Check if key exists in storage (regardless of its value). Reading can throw
   // when storage access is blocked, which should degrade to the initial value
   // rather than take down store creation.
@@ -168,62 +153,78 @@ const createStorageStore = (storageType, key, initialValue, options = {}) => {
     storedItem = storage.getItem(key)
   } catch (error) {
     console.error(`Failed to read from storage with key "${key}":`, error)
+    return { keyExists: false, value: fallback }
   }
-  const keyExists = storedItem !== null
 
-  const getStoredValue = () => {
-    try {
-      if (keyExists) {
-        // If key exists, parse and return the stored value (even if it's null)
-        return JSON.parse(storedItem)
-      }
-      // Only use initialValue if key doesn't exist
-      return initialValue
-    } catch {
-      return initialValue
+  if (storedItem === null) {
+    // Only use initialValue if key doesn't exist
+    return { keyExists: false, value: fallback }
+  }
+
+  try {
+    // If key exists, parse and return the stored value (even if it's null)
+    return { keyExists: true, value: JSON.parse(storedItem) }
+  } catch {
+    return { keyExists: true, value: fallback }
+  }
+}
+
+const writeStoredValue = (storage, storageType, key, value) => {
+  // Serialize outside the try so an opaque-value error surfaces synchronously
+  // rather than being swallowed as a generic save failure.
+  const stringifiedValue = stringifyForStorage(value, storageType, key)
+  try {
+    storage.setItem(key, stringifiedValue)
+  } catch (error) {
+    console.error(`Failed to save value to storage with key "${key}":`, error)
+  }
+}
+
+const storageUnavailableReason = (storageType, key) =>
+  `${storageType}Storage is not available, so "${key}" will not persist. This store will keep its value in memory only.`
+
+// Attach localStorage/sessionStorage persistence to an existing store. This is
+// shared by the immediate `.local()` / `.session()` factories and the explicit
+// `hydrate()` API, which keeps the original store identity and its subscribers.
+const hydrateStorageStore = (storeObj, storageType, key, options = {}) => {
+  const storage = getStorage(storageType)
+
+  if (
+    !storage ||
+    typeof storage.getItem !== 'function' ||
+    typeof storage.setItem !== 'function'
+  ) {
+    if (typeof window !== 'undefined') {
+      console.warn(storageUnavailableReason(storageType, key))
     }
+    return false
   }
 
-  // A server render has no storage to read, so it produces the initial value.
-  // Pinning it here keeps the hydration snapshot matching the server HTML; React
-  // switches to the stored value on the first client render after hydration.
-  const storeObj = {
-    value: getStoredValue(),
-    listeners: new Set(),
-    serverValue: initialValue,
-    equals: resolveEquals(options.equals),
+  // Resolve the new backend before disturbing the existing binding. Once it is
+  // usable, detach the old binding without updating its key; the new target is
+  // authoritative from this point forward.
+  if (storeObj._storageBinding) {
+    storeObj._storageBinding.unbind({ flush: false })
   }
-  stateMap.set(storeObj, storeObj)
-  const storeProxy = createStoreProxy(storeObj)
+
+  // React also calls getServerSnapshot during client hydration. Pin the value
+  // from before the browser-only storage read so it can still match server HTML.
+  if (!('serverValue' in storeObj)) storeObj.serverValue = storeObj.value
 
   // Writes are debounced. The default of 0 coalesces everything within a tick;
   // a larger interval coalesces bursts (dragging, typing) into a single write,
   // which matters because each one re-serializes the whole state.
   const saveDelay = options.debounce ?? 0
 
-  // If key didn't exist, save the initial value to storage. Serialize outside
-  // the try so an opaque-value error surfaces synchronously at creation rather
-  // than being swallowed as a generic save failure.
-  if (!keyExists) {
-    const stringifiedValue = stringifyForStorage(storeObj.value, storageType, key)
-    try {
-      storage.setItem(key, stringifiedValue)
-    } catch (error) {
-      console.error(
-        `Failed to save initial value to storage with key "${key}":`,
-        error,
-      )
-    }
-  }
-
   // Track if we're currently updating from storage to prevent circular updates
   let isUpdatingFromStorage = false
-
   let saveTimeout = null
+  let active = true
 
   const saveNow = () => {
     clearTimeout(saveTimeout)
     saveTimeout = null
+    if (!active) return
     try {
       const stringifiedValue = stringifyForStorage(
         storeObj.value,
@@ -236,42 +237,52 @@ const createStorageStore = (storageType, key, initialValue, options = {}) => {
     }
   }
 
-  const saveListener = () => {
-    // Don't save to storage if we're updating from a storage event
-    if (isUpdatingFromStorage) return
+  const applyLoadedValue = nextValue => {
+    if (equalsFor(storeObj)(nextValue, storeObj.value)) return
+    isUpdatingFromStorage = true
+    // Preserve object references for unchanged nested paths to prevent
+    // unnecessary re-renders for components listening to nested properties
+    storeObj.value = preserveReferences(storeObj.value, nextValue)
+    storeObj.listeners.forEach(listener => listener())
+    notifyDependentStores(storeObj, simpleGet)
+    isUpdatingFromStorage = false
+  }
 
+  // A missing key is initialized from the store's current value. An existing
+  // key wins and hydrates the store instead.
+  const valueBeforeHydration = storeObj.value
+  const { keyExists, value: loadedValue } = readStoredValue(
+    storage,
+    key,
+    valueBeforeHydration,
+  )
+  if (keyExists) {
+    applyLoadedValue(loadedValue)
+  } else {
+    writeStoredValue(storage, storageType, key, valueBeforeHydration)
+  }
+
+  const saveListener = () => {
+    // Don't save to storage if we're applying a storage read/event.
+    if (isUpdatingFromStorage) return
     clearTimeout(saveTimeout)
     saveTimeout = setTimeout(saveNow, saveDelay)
   }
   storeObj.listeners.add(saveListener)
 
-  // Flush the debounced write before tearing down — otherwise `set()` followed
-  // by `destroy()` silently loses the write — then unsubscribe, so a destroyed
-  // store stops persisting later updates.
-  const teardown = () => {
-    if (saveTimeout !== null) saveNow()
-    storeObj.listeners.delete(saveListener)
-  }
-
-  // Listen for storage changes from other tabs/windows (localStorage)
+  let handleStorageChange = null
   if (
     storageType === 'local' &&
     typeof window !== 'undefined' &&
     window.addEventListener
   ) {
-    const handleStorageChange = event => {
-      // Only handle events for key
+    handleStorageChange = event => {
       if (event.key !== key) return
+      if (event.storageArea && event.storageArea !== storage) return
 
-      // Verify the storage area matches localStorage
-      if (event.storageArea && event.storageArea !== localStorage) {
-        return
-      }
-
-      // Key removed: keep in-memory state
+      // Removing a key in another tab leaves the current in-memory state alone.
       if (event.newValue === null) return
 
-      // Parse the new value from storage
       let newValue
       try {
         newValue = JSON.parse(event.newValue)
@@ -283,29 +294,52 @@ const createStorageStore = (storageType, key, initialValue, options = {}) => {
         return
       }
 
-      // Only update if the value has actually changed
-      if (!equalsFor(storeObj)(newValue, storeObj.value)) {
-        isUpdatingFromStorage = true
-        // Preserve object references for unchanged nested paths to prevent
-        // unnecessary re-renders for components listening to nested properties
-        storeObj.value = preserveReferences(storeObj.value, newValue)
-        storeObj.listeners.forEach(listener => listener())
-
-        notifyDependentStores(storeObj, simpleGet)
-
-        isUpdatingFromStorage = false
-      }
+      applyLoadedValue(newValue)
     }
-
     window.addEventListener('storage', handleStorageChange)
-
-    storeObj._cleanup = () => {
-      window.removeEventListener('storage', handleStorageChange)
-      teardown()
-    }
-  } else {
-    storeObj._cleanup = teardown
   }
+
+  // Destroy flushes the active binding. Retargeting passes `flush: false`, so
+  // the previous key is intentionally left at its last persisted value.
+  const binding = {
+    storageType,
+    key,
+    unbind: ({ flush = true } = {}) => {
+      if (!active) return
+      if (saveTimeout !== null) {
+        if (flush) saveNow()
+        else {
+          clearTimeout(saveTimeout)
+          saveTimeout = null
+        }
+      }
+      active = false
+      storeObj.listeners.delete(saveListener)
+      if (handleStorageChange && typeof window !== 'undefined') {
+        window.removeEventListener('storage', handleStorageChange)
+      }
+      if (storeObj._storageBinding === binding) {
+        storeObj._storageBinding = null
+      }
+    },
+  }
+  storeObj._storageBinding = binding
+  return true
+}
+
+// Create immediately storage-backed stores while preserving the established
+// `.local()` / `.session()` behavior.
+const createStorageStore = (storageType, key, initialValue, options = {}) => {
+  const storeObj = {
+    value: initialValue,
+    listeners: new Set(),
+    serverValue: initialValue,
+    equals: resolveEquals(options.equals),
+  }
+  stateMap.set(storeObj, storeObj)
+  const storeProxy = createStoreProxy(storeObj)
+
+  hydrateStorageStore(storeObj, storageType, key, options)
 
   return storeProxy
 }
@@ -486,6 +520,7 @@ const createIndexStore = (storeName, dbName, initialValue, options = {}) => {
     listeners: new Set(),
     serverValue: initialValue,
     equals: resolveEquals(options.equals),
+    _persistenceBackend: 'index',
   }
   stateMap.set(storeObj, storeObj)
   const storeProxy = createStoreProxy(storeObj)
@@ -1246,10 +1281,49 @@ function createStoreProxy(storeObj, path = []) {
 
       if (prop === 'destroy') {
         return () => {
+          if (storeObj._storageBinding) {
+            storeObj._storageBinding.unbind()
+          }
           if (storeObj._cleanup) {
             storeObj._cleanup()
             storeObj._cleanup = null
           }
+        }
+      }
+
+      if (prop === 'hydrate') {
+        return hydrateOptions => {
+          if (path.length > 0) {
+            throw new Error('hydrate() must be called on the root store.')
+          }
+          if (storeObj.isDerived || storeObj.isAsync) {
+            throw new Error(
+              'hydrate() cannot attach persistence to a derived or async store.',
+            )
+          }
+          if (storeObj._persistenceBackend === 'index') {
+            throw new Error(
+              'hydrate() cannot attach localStorage/sessionStorage persistence to an IndexedDB store.',
+            )
+          }
+          if (!hydrateOptions || typeof hydrateOptions !== 'object') {
+            throw new TypeError(
+              "hydrate() requires { storage: 'local' | 'session', key }.",
+            )
+          }
+
+          const { storage, key, ...options } = hydrateOptions
+          if (storage !== 'local' && storage !== 'session') {
+            throw new TypeError(
+              "hydrate() storage must be either 'local' or 'session'.",
+            )
+          }
+          if (typeof key !== 'string') {
+            throw new TypeError('hydrate() key must be a string.')
+          }
+
+          hydrateStorageStore(storeObj, storage, key, options)
+          return proxy
         }
       }
 
@@ -1388,6 +1462,7 @@ function createStoreProxy(storeObj, path = []) {
           prop === 'derive' ||
           prop === 'async' ||
           prop === 'destroy' ||
+          prop === 'hydrate' ||
           prop === '_path' ||
           prop === '_obj')
       ) {

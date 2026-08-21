@@ -39,6 +39,20 @@ export interface PersistOptions<T> extends StoreOptions<T> {
   debounce?: number
 }
 
+export interface HydrateOptions {
+  /**
+   * Browser storage backend to attach to this store.
+   */
+  storage: 'local' | 'session'
+  /** Storage key to read from or create. */
+  key: string
+  /**
+   * Milliseconds to wait after the last change before writing. Defaults to 0.
+   * A pending write is flushed when the store is destroyed.
+   */
+  debounce?: number
+}
+
 /**
  * A function that updates state, similar to React's setState.
  * Can accept either a new value or an updater function.
@@ -204,6 +218,22 @@ export interface Store<T> {
    * ```
    */
   destroy(): void
+
+  /**
+   * Attach or retarget localStorage/sessionStorage persistence on this store.
+   * If the key exists, its stored value replaces the store value. If it does
+   * not exist, the key is created from the store's current value. Subsequent
+   * writes persist to that key. Rebinding leaves the previous key at its last
+   * persisted value. Returns this same store instance.
+   *
+   * @example
+   * ```ts
+   * const settings = store(defaults)
+   * settings.hydrate({ storage: 'local', key: 'settings' })
+   * settings.hydrate({ storage: 'local', key: 'settings.v2' })
+   * ```
+   */
+  hydrate(options: HydrateOptions): this
 }
 
 /**
