@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-08-21
+
 ### Added
 
 - `store.hydrate({ storage, key, debounce? })` to attach or retarget localStorage/sessionStorage persistence on an existing store. An existing key hydrates the store; a missing key is created from the store's current value. Default `.local(key)` / `.session(key)` behaviour is unchanged.
