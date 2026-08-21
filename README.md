@@ -121,16 +121,6 @@ localStorage-backed stores also **synchronize across tabs**: when another tab wr
 const settingsStore = store({ theme: 'dark' }).local('settings')
 ```
 
-Pass `{ defer: true }` to skip the initial read/write. The store stays at its initial value in memory until you call `rehydrate()` — useful when the storage key is not known yet, or persistence should wait for a later signal:
-
-```jsx
-const settingsStore = store({ theme: 'dark' }).local('settings', { defer: true })
-settingsStore.rehydrate()
-settingsStore.rehydrate({ key: 'settings.v2' })
-```
-
-`.session()` accepts the same `defer` option and `rehydrate()` method.
-
 #### `store(initialValue).session(key)`
 
 Creates a store backed by sessionStorage with automatic persistence. Data is automatically serialized to JSON when saving and deserialized when loading.
@@ -229,20 +219,42 @@ Call it when a persisted store is no longer needed, so it releases its storage l
 
 Derived stores don't require `destroy()` to avoid leaking. A source store holds its dependents weakly, so a derived store that the application has dropped — one created inside a component that has since unmounted, say — becomes eligible for garbage collection and stops recomputing on its own. Calling `destroy()` on it simply makes that immediate and deterministic.
 
-#### `store.rehydrate({ key }?)`
+#### `store.hydrate({ storage, key, debounce? })`
 
-Binds (or rebinds) a `.local()` / `.session()` store to a storage key. The in-memory value is replaced with whatever is stored at that key. If the key is missing, the store resets to its **original initial value** and that value is written to the key — it does not copy whatever currently sits in memory onto the new key.
+Attaches localStorage or sessionStorage persistence to an existing in-memory store. Before `hydrate()` runs, the store does not touch browser storage and `set()` only updates memory.
 
-`rehydrate()` with no argument uses the key passed to `.local()` / `.session()`, or the key from the last `rehydrate({ key })`.
+If the key already exists, its stored value replaces the store value. If the key does not exist, it is created from the store's **current value**. Subsequent changes are persisted automatically. `hydrate()` returns the same store instance, so existing subscribers and derived stores stay connected.
 
 ```jsx
-const settings = store({ theme: 'dark' }).local('settings', { defer: true })
-// Nothing is read or written yet
-settings.rehydrate() // bind 'settings'
-settings.rehydrate({ key: 'settings.v2' }) // load v2 (or initial value if empty)
+const settings = store({ theme: 'dark' })
+settings.set({ theme: 'sepia' }) // memory only
+
+// Existing "settings" data wins; otherwise the current sepia value is stored.
+settings.hydrate({ storage: 'local', key: 'settings' })
+
+// Leave the old key as-is, then bind to settings.v2 using the same rules.
+settings.hydrate({ storage: 'local', key: 'settings.v2' })
 ```
 
-Calling `rehydrate()` on an in-memory store logs an error and does nothing. After `destroy()`, `rehydrate()` can bind again.
+Use `storage: 'session'` for sessionStorage. Passing `debounce` configures writes for the new binding. Calling `hydrate()` again cancels any pending write to the previous binding, leaving that key at its last persisted value. Calling it after `destroy()` binds the store again.
+
+`hydrate()` can also retarget a store that was created with `.local()` or `.session()`:
+
+```jsx
+const settings = store({ theme: 'dark' }).local('settings', {
+  debounce: 5000,
+})
+
+settings.set({ theme: 'sepia' }) // pending write to "settings"
+settings.hydrate({ storage: 'local', key: 'settings.v2' })
+```
+
+After the retarget:
+
+- The pending write to `settings` is cancelled, so that key keeps its last persisted value.
+- If `settings.v2` already exists, its value replaces the store's current value.
+- If `settings.v2` is missing, it is created from the current `{ theme: 'sepia' }` value.
+- All future changes persist to `settings.v2` only.
 
 ## Derived Stores
 
@@ -621,9 +633,9 @@ const boardStore = store(largeBoard).local('board', {
 
 Raising `debounce` never risks losing data: `destroy()` flushes a pending write rather than dropping it. It does mean a hard tab close within the interval can lose the most recent change, so keep the interval short for data you cannot afford to lose. `.session()` and `.index()` take the same option.
 
-### Deferred persistence
+### On-demand persistence
 
-`.local(key, { defer: true })` and `.session(key, { defer: true })` create the store without touching storage. `set()` updates memory only. `rehydrate()` (or `rehydrate({ key })`) is the first read/write, and can later point the same store at a different key. A pending write to the previous key is flushed first, matching `destroy()`.
+Create a regular store and call `hydrate({ storage, key })` when persistence should begin. Until then it remains entirely in memory. Hydration reads an existing key into the same store or creates a missing key from the store's current value. Calling `hydrate()` again can switch the same store — including one created with `.local()` or `.session()` — to another localStorage or sessionStorage key. Any pending write to the previous binding is cancelled, the previous key is left at its last persisted value, and future updates go only to the new binding. `destroy()` still flushes the active binding.
 
 ## Server-Side Rendering
 

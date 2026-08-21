@@ -37,19 +37,20 @@ export interface PersistOptions<T> extends StoreOptions<T> {
    * flushed by `destroy()`, so raising this never risks losing data.
    */
   debounce?: number
-  /**
-   * If true, keep `initialValue` in memory and do not read or write storage
-   * until `rehydrate()` runs. Defaults to false.
-   */
-  defer?: boolean
 }
 
-export interface RehydrateOptions {
+export interface HydrateOptions {
   /**
-   * Storage key to bind. Defaults to the key passed to `.local()` / `.session()`,
-   * or the key from the last `rehydrate({ key })`.
+   * Browser storage backend to attach to this store.
    */
-  key?: string
+  storage: 'local' | 'session'
+  /** Storage key to read from or create. */
+  key: string
+  /**
+   * Milliseconds to wait after the last change before writing. Defaults to 0.
+   * A pending write is flushed when the store is destroyed.
+   */
+  debounce?: number
 }
 
 /**
@@ -219,20 +220,20 @@ export interface Store<T> {
   destroy(): void
 
   /**
-   * Bind or retarget persistence for a `.local()` / `.session()` store.
-   * Reads the given key (or the current one), replacing in-memory state with
-   * the stored value — or the original initial value if the key is missing —
-   * then persists subsequent writes there. Does nothing useful on in-memory
-   * stores; those log an error.
+   * Attach or retarget localStorage/sessionStorage persistence on this store.
+   * If the key exists, its stored value replaces the store value. If it does
+   * not exist, the key is created from the store's current value. Subsequent
+   * writes persist to that key. Rebinding leaves the previous key at its last
+   * persisted value. Returns this same store instance.
    *
    * @example
    * ```ts
-   * const settings = store(defaults).local('settings', { defer: true })
-   * settings.rehydrate()
-   * settings.rehydrate({ key: 'settings.v2' })
+   * const settings = store(defaults)
+   * settings.hydrate({ storage: 'local', key: 'settings' })
+   * settings.hydrate({ storage: 'local', key: 'settings.v2' })
    * ```
    */
-  rehydrate(options?: RehydrateOptions): void
+  hydrate(options: HydrateOptions): this
 }
 
 /**
